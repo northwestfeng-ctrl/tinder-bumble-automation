@@ -266,12 +266,12 @@ def inspect_tinder(_state=None) -> int:
     """
     巡检 Tinder，返回本轮回复数。直接在主进程调用，复用 BrowserManager 单例。
     """
-    from project_config import build_tinder_config
-
     bot = None
     TinderBot, TinderBackendError = _import_tinder_bot()
+    tinder_module = sys.modules.get("tinder_core.tinder_bot")
+    build_config = getattr(tinder_module, "build_tinder_config")
     try:
-        config = build_tinder_config()
+        config = build_config()
         bot = TinderBot(config)
         bot.setup()
         reply_count = bot.check_all_contacts()
