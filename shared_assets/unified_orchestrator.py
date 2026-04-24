@@ -44,12 +44,13 @@ import sys
 import time
 import random
 import logging
-import importlib
+import importlib.util
 import signal
 import threading
 import json
 import urllib.request
 import re
+import types
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -62,10 +63,6 @@ SCRIPT_DIR      = Path(__file__).parent          # shared_assets/
 TINDER_DIR      = SCRIPT_DIR.parent / "tinder-automation"
 BUMBLE_DIR      = SCRIPT_DIR.parent / "bumble-automation"
 SHARED_CFG      = SCRIPT_DIR / "strategy_config.json"
-
-sys.path.insert(0, str(SCRIPT_DIR))         # shared_assets/ → unified_reply_engine.py
-sys.path.insert(1, str(TINDER_DIR))        # tinder-automation/ → core.* (TinderBot)
-sys.path.insert(2, str(BUMBLE_DIR))        # bumble-automation/  → core.* (BumbleBot)
 
 from logging.handlers import RotatingFileHandler
 LOG_FILE = SCRIPT_DIR / "orchestrator.log"
@@ -164,21 +161,42 @@ def _notify_run_result(title: str, details: list[str]) -> None:
     _send_telegram_summary(message)
 
 
+def _ensure_package(package_name: str, package_dir: Path) -> None:
+    package = sys.modules.get(package_name)
+    if package is None:
+        package = types.ModuleType(package_name)
+        package.__path__ = [str(package_dir)]
+        package.__file__ = str(package_dir / "__init__.py")
+        sys.modules[package_name] = package
+    elif hasattr(package, "__path__"):
+        paths = list(package.__path__)
+        if str(package_dir) not in paths:
+            package.__path__ = [str(package_dir), *paths]
+
+
+def _load_module_once(module_name: str, module_path: Path):
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模块 {module_name}: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _import_tinder_bot():
-    """按需加载 Tinder core 包；Bumble 已独立为 bumble_core，不再动态清理 sys.modules。"""
-    if str(TINDER_DIR) in sys.path:
-        sys.path.remove(str(TINDER_DIR))
-    sys.path.insert(0, str(TINDER_DIR))
-    module = importlib.import_module("core.tinder_bot")
+    """按需加载 Tinder Bot；使用 tinder_core 命名空间，避免与 Bumble core 冲突。"""
+    _ensure_package("tinder_core", TINDER_DIR / "core")
+    module = _load_module_once("tinder_core.tinder_bot", TINDER_DIR / "core" / "tinder_bot.py")
     return module.TinderBot, module.TinderBackendError
 
 
 def _import_bumble_inspect():
     """按需加载 Bumble inspect；BumbleBot 在该模块内用 bumble_core 独立加载。"""
-    if str(SCRIPT_DIR) in sys.path:
-        sys.path.remove(str(SCRIPT_DIR))
-    sys.path.insert(0, str(SCRIPT_DIR))
-    module = importlib.import_module("bumble_inspect")
+    module = _load_module_once("bumble_inspect", SCRIPT_DIR / "bumble_inspect.py")
     return module.run_inspect
 
 # ─────────────────────────────────────────────────────────────────
@@ -369,10 +387,9 @@ def run_loop():
     """双核交替调度状态机"""
     # 初始化 TinderBot（预热，加载配置）
     try:
-        import sys as _sys
-        _sys.path.insert(0, str(TINDER_DIR))
-        from core.tinder_bot import TinderBot, CONFIG
-        _ = CONFIG
+        _import_tinder_bot()
+        tinder_module = sys.modules.get("tinder_core.tinder_bot")
+        _ = getattr(tinder_module, "CONFIG", None)
         log.info("[Init] Tinder CONFIG 加载成功")
     except Exception as e:
         log.error(f"[Init] Tinder CONFIG 加载失败: {e}")

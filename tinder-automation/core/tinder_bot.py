@@ -11,29 +11,55 @@ import re
 import random
 import sqlite3
 import logging
+import importlib.util
+import types
 from datetime import datetime, timedelta
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).parent.parent))
+def _load_project_config_module():
+    module_name = "tinder_project_config"
+    module_path = Path(__file__).parent.parent / "project_config.py"
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载 Tinder project_config: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
-from project_config import (
-    SHARED_ASSETS_ROOT,
-    build_browser_launch_options,
-    build_tinder_config,
-)
 
-sys.path.insert(0, str(SHARED_ASSETS_ROOT))
+def _ensure_tinder_core_package() -> None:
+    package_name = "tinder_core"
+    package_dir = Path(__file__).parent
+    package = sys.modules.get(package_name)
+    if package is None:
+        package = types.ModuleType(package_name)
+        package.__path__ = [str(package_dir)]
+        package.__file__ = str(package_dir / "__init__.py")
+        sys.modules[package_name] = package
+
+
+_project_config = _load_project_config_module()
+SHARED_ASSETS_ROOT = _project_config.SHARED_ASSETS_ROOT
+build_browser_launch_options = _project_config.build_browser_launch_options
+build_tinder_config = _project_config.build_tinder_config
+
+_ensure_tinder_core_package()
+if str(SHARED_ASSETS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SHARED_ASSETS_ROOT))
 
 from atomic_state import read_json_file, update_json_file, write_json_file
 from queue_db import get_reply, confirm_sent
 
-from core.cdp_events import HumanClicker, HumanTyper, HumanScroller, HumanHover
-from core.human_behavior import HumanTrajectory, HumanDelay, ActionRhythm, SwipeSimulator
-from core.network_isolation import ProxyRotator
-from core.strategy_loader import load_strategy
-from core.lifecycle_guard import LifecycleGuard, ActionCooldown
-from core.corpus_feedback import ConversationStore
+from tinder_core.cdp_events import HumanClicker, HumanTyper, HumanScroller, HumanHover
+from tinder_core.human_behavior import HumanTrajectory, HumanDelay, ActionRhythm, SwipeSimulator
+from tinder_core.network_isolation import ProxyRotator
+from tinder_core.strategy_loader import load_strategy
+from tinder_core.lifecycle_guard import LifecycleGuard, ActionCooldown
+from tinder_core.corpus_feedback import ConversationStore
 from conversation_store import MISSING_SNAPSHOT_KEY, outcome_from_partner_followup
 from unified_send_message import send_message_unified, get_last_send_diagnostics
 from unified_reply_engine import (
@@ -64,7 +90,7 @@ TINDER_BASELINE_FILE = Path(__file__).parent.parent / "history_baseline.json"
 TINDER_RUNTIME_STATE_FILE = Path(__file__).parent.parent / "tinder_runtime_state.json"
 DOM_RULES_FILE = Path(os.getenv("APP_DOM_RULES_FILE", str(SHARED_ASSETS_ROOT / "dom_rules.json")))
 LOCAL_DOM_RULES_FILE = Path(
-    os.getenv("APP_DOM_RULES_LOCAL_FILE", str(SHARED_ASSETS_ROOT / "dom_rules.local.json"))
+    os.getenv("APP_DOM_RULES_LOCAL_FILE", str(Path.home() / ".openclaw" / "private" / "dom_rules.local.json"))
 )
 
 DEFAULT_TINDER_PROFILE_DOM_RULES = {
