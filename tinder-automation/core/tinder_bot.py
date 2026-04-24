@@ -604,8 +604,12 @@ class TinderBot:
 
         db_path = getattr(self.corpus_store, "db_path", None)
         if db_path and Path(db_path).exists():
+            conn = None
             try:
-                conn = sqlite3.connect(db_path)
+                conn = sqlite3.connect(db_path, timeout=30)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA busy_timeout=30000")
                 rows = conn.execute(
                     """
                     SELECT match_id
@@ -619,13 +623,18 @@ class TinderBot:
                     """,
                     (limit,),
                 ).fetchall()
-                conn.close()
                 for (match_id,) in rows:
                     _push(match_id)
                     if len(result) >= limit:
                         break
             except Exception as exc:
                 self._log("warning", f"[Tinder] 读取近期 match_id 失败: {exc}")
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         return result[:limit]
 

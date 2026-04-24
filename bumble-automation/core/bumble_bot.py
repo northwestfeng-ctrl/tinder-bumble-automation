@@ -258,10 +258,27 @@ class BumbleBot:
                             return 'them';
                         }
                     };
-                    bubbles.forEach(bubble => {
+                    const extractBubbleText = (bubble) => {
                         const textEl = bubble.querySelector('div[class*="message-bubble__text"]');
-                        if (!textEl) return;
-                        const text = textEl.innerText.trim();
+                        let text = ((textEl && textEl.innerText) || bubble.innerText || '').trim();
+                        if (text) return text;
+
+                        const attrs = [];
+                        bubble.querySelectorAll('[aria-label], img[alt], svg[aria-label], [title]').forEach(el => {
+                            ['aria-label', 'alt', 'title'].forEach(name => {
+                                const value = (el.getAttribute(name) || '').trim();
+                                if (value) attrs.push(value);
+                            });
+                        });
+                        const attrText = attrs.join(' ').trim();
+                        if (!attrText) return '';
+                        if (/(like|liked|heart|react|reaction|赞|喜欢|红心|爱心)/i.test(attrText)) {
+                            return '[liked your message]';
+                        }
+                        return attrText;
+                    };
+                    bubbles.forEach(bubble => {
+                        const text = extractBubbleText(bubble);
                         if (!text || text.length > 500) return;
 
                         // 跳过时间戳
@@ -388,9 +405,27 @@ class BumbleBot:
                 const rect = bubble.getBoundingClientRect();
                 return rect.left > window.innerWidth / 2 ? 'me' : 'them';
             };
+            const extractBubbleText = (bubble) => {
+                let text = (bubble.innerText || '').trim();
+                if (text) return text;
+
+                const attrs = [];
+                bubble.querySelectorAll('[aria-label], img[alt], svg[aria-label], [title]').forEach(el => {
+                    ['aria-label', 'alt', 'title'].forEach(name => {
+                        const value = (el.getAttribute(name) || '').trim();
+                        if (value) attrs.push(value);
+                    });
+                });
+                const attrText = attrs.join(' ').trim();
+                if (!attrText) return '';
+                if (/(like|liked|heart|react|reaction|赞|喜欢|红心|爱心)/i.test(attrText)) {
+                    return '[liked your message]';
+                }
+                return attrText;
+            };
 
             bubbles.forEach(b => {
-                const text = (b.innerText || '').trim();
+                const text = extractBubbleText(b);
                 if (!text || text.length > 500) return;
                 if (/^\d{1,2}:\d{2}$/.test(text)) return;
                 if (seen.has(text)) return;

@@ -188,8 +188,12 @@ def load_recent_match_ids(limit: int = 20) -> list[str]:
     if not DB_FILE.exists():
         return []
 
+    conn = None
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = sqlite3.connect(DB_FILE, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         rows = conn.execute(
             """
             SELECT match_id
@@ -202,9 +206,14 @@ def load_recent_match_ids(limit: int = 20) -> list[str]:
             """,
             (limit,),
         ).fetchall()
-        conn.close()
     except Exception:
         return []
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     seen = set()
     result = []
