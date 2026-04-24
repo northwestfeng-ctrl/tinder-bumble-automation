@@ -52,7 +52,7 @@ crontab -e
    ```
    报告："✅ 已自动重启进程"
 
-2. 其他错误 → 转发给 Bamboo C：
+2. 其他错误 → 转发给主 agent：
    ```
    @Claude 自动化系统需要帮助：
    [原始报告]
@@ -79,7 +79,7 @@ cd /Users/chengang/.openclaw/workspace/projects/shared_assets
 ```
 1. Cron 每 10 分钟运行 agent_monitor.py
    ↓
-2. 发现问题 → 通知你（Bamboo C）
+2. 发现问题 → 通知你（主 agent）
    ↓
 3. 你收到通知 → 转发给零号龙虾
    ↓

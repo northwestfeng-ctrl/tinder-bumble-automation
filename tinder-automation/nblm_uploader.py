@@ -72,7 +72,7 @@ EVOLUTION_PROMPT = """你是一个 dating-chat 对话策略分析系统。下面
 
 硬性约束：
 - success_patterns.pattern 必须直接写成“对方真实来句原文”或非常接近原文的短句，不要写“对方提到…/对方自称…/聊到…”这类摘要标签
-- success_patterns.pattern 优先保留问句或原句本身，例如“为什么是七双袜子”而不是“对方问起某个数字或原因”
+- success_patterns.pattern 优先保留问句或原句本身，例如“为什么是这个设定”而不是“对方问起某个数字或原因”
 - success_patterns.example 必须直接写成我方可发送的回复原句，不要写“名字+调侃式质疑”“让对方接梗继续互动”这类策略说明
 - success_patterns.example 必须写成可跨场景复用的短回复模板，避免依赖具体人名、明星名、城市名、节日名或一次性梗
 - success_patterns 只保留适合短句回复的策略，example 必须是 50 字以内、口语化、可直接复用的回复
@@ -595,16 +595,16 @@ def _normalize_pattern_text(text: str) -> str:
         return ""
     # 去掉句尾装饰性 emoji / 符号，尽量保留可读的真实来句文本
     candidate = re.sub(r"[^\w\u4e00-\u9fffA-Za-z0-9！？!?。，“”\"'‘’：:，,（）()]+$", "", candidate)
-    # 统一常见数字写法，减少同义 pattern 重复
-    candidate = candidate.replace("7双", "七双")
+    # 统一常见数字写法，减少同义 pattern 重复，同时避免把账号私有梗沉淀进公开策略。
+    candidate = re.sub(r"[七7]\s*双", "数字设定", candidate)
     candidate = candidate.strip("：:，,。.!！?？ ")
     return _clean_text(candidate, 80)
 
 
 def _pattern_family(pattern: str) -> str:
     candidate = _normalize_pattern_text(pattern)
-    if "七双" in candidate:
-        return "七双袜子"
+    if "数字设定" in candidate:
+        return "个人设定梗"
     return candidate
 
 

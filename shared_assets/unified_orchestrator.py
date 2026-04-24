@@ -164,16 +164,8 @@ def _notify_run_result(title: str, details: list[str]) -> None:
     _send_telegram_summary(message)
 
 
-def _purge_core_modules() -> None:
-    """清理已加载的 core 包，避免 Tinder/Bumble 同名包相互污染。"""
-    for name in list(sys.modules):
-        if name == "core" or name.startswith("core."):
-            sys.modules.pop(name, None)
-
-
 def _import_tinder_bot():
-    """按需加载 Tinder core 包，避免与 Bumble 的 core 包冲突。"""
-    _purge_core_modules()
+    """按需加载 Tinder core 包；Bumble 已独立为 bumble_core，不再动态清理 sys.modules。"""
     if str(TINDER_DIR) in sys.path:
         sys.path.remove(str(TINDER_DIR))
     sys.path.insert(0, str(TINDER_DIR))
@@ -182,13 +174,9 @@ def _import_tinder_bot():
 
 
 def _import_bumble_inspect():
-    """按需加载 Bumble inspect 模块，避免与 Tinder 的 core 包冲突。"""
-    _purge_core_modules()
-    if str(BUMBLE_DIR) in sys.path:
-        sys.path.remove(str(BUMBLE_DIR))
+    """按需加载 Bumble inspect；BumbleBot 在该模块内用 bumble_core 独立加载。"""
     if str(SCRIPT_DIR) in sys.path:
         sys.path.remove(str(SCRIPT_DIR))
-    sys.path.insert(0, str(BUMBLE_DIR))
     sys.path.insert(0, str(SCRIPT_DIR))
     module = importlib.import_module("bumble_inspect")
     return module.run_inspect

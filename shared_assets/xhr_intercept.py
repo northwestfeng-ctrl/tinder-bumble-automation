@@ -10,8 +10,20 @@ import threading
 import logging
 from dataclasses import dataclass, field, asdict
 from typing import Optional
+import os
 
 log = logging.getLogger("XHR")
+
+
+def _privacy_mask_words() -> set[str]:
+    raw = os.getenv("APP_PRIVACY_MASK_WORDS", "")
+    if not raw:
+        return set()
+    return {
+        item.strip()
+        for item in re.split(r"[,，|;；\n]+", raw)
+        if item.strip()
+    }
 
 
 # ── 数据结构 ─────────────────────────────────────────────────────────
@@ -35,14 +47,7 @@ class MatchProfile:
 
     def __post_init__(self):
         """清洗: 移除己方资料泄露"""
-        OWN = {
-            "Bamboo", "40岁", "四十岁", "182cm", "福州",
-            "喜欢冒险和美食", "Travel", "Music",
-            "带上七双袜子来找我", "七双袜子",
-            "文学", "积极生活", "政治", "电影", "爵士乐",
-            "长期伴侣", "蓝勾认证", "蓝勾",
-        }
-        for frag in OWN:
+        for frag in _privacy_mask_words():
             self.bio = self.bio.replace(frag, "")
         self.bio = " | ".join(p.strip() for p in self.bio.split("|") if p.strip())
         if self.bio == " | ":

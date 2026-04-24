@@ -63,6 +63,9 @@ logger = logging.getLogger("tinder_bot")
 TINDER_BASELINE_FILE = Path(__file__).parent.parent / "history_baseline.json"
 TINDER_RUNTIME_STATE_FILE = Path(__file__).parent.parent / "tinder_runtime_state.json"
 DOM_RULES_FILE = Path(os.getenv("APP_DOM_RULES_FILE", str(SHARED_ASSETS_ROOT / "dom_rules.json")))
+LOCAL_DOM_RULES_FILE = Path(
+    os.getenv("APP_DOM_RULES_LOCAL_FILE", str(SHARED_ASSETS_ROOT / "dom_rules.local.json"))
+)
 
 DEFAULT_TINDER_PROFILE_DOM_RULES = {
     "selectors": [
@@ -84,52 +87,45 @@ DEFAULT_TINDER_PROFILE_DOM_RULES = {
         "Messages",
         "消息",
     ],
-    "own_profile_fragments": [
-        "喜欢冒险和美食",
-        "冒险",
-        "美食",
-        "Travel",
-        "Music",
-        "Bamboo",
-        "40岁",
-        "四十岁",
-        "182cm",
-        "福州",
-        "带上七双袜子来找我",
-        "七双袜子",
-        "做一辈子的好朋友",
-        "躺下",
-        "生命只剩20分钟",
-        "文学",
-        "积极生活",
-        "政治",
-        "电影",
-        "爵士乐",
-        "摩羯座",
-        "长期伴侣",
-        "蓝勾认证",
-        "蓝勾",
-        "身高",
-        "cm",
-    ],
+    "own_profile_fragments": [],
 }
 
 
 def _load_dom_rule_section(section: str) -> dict:
     defaults = DEFAULT_TINDER_PROFILE_DOM_RULES if section == "tinder_profile" else {}
     rules = {key: list(value) if isinstance(value, list) else value for key, value in defaults.items()}
-    try:
-        if DOM_RULES_FILE.exists():
-            data = json.loads(DOM_RULES_FILE.read_text(encoding="utf-8"))
+
+    def merge_from(path: Path, *, allow_missing: bool = True) -> None:
+        if not path.exists():
+            if not allow_missing:
+                logger.warning(f"DOM 规则文件不存在: {path}")
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
             section_data = data.get(section, {}) if isinstance(data, dict) else {}
-            if isinstance(section_data, dict):
-                for key, value in section_data.items():
-                    if isinstance(value, list):
-                        rules[key] = value
-                    elif value is not None:
-                        rules[key] = value
-    except Exception as exc:
-        logger.warning(f"DOM 规则读取失败，使用默认值: {exc}")
+            if not isinstance(section_data, dict):
+                return
+            for key, value in section_data.items():
+                if isinstance(value, list):
+                    rules[key] = value
+                elif value is not None:
+                    rules[key] = value
+        except Exception as exc:
+            logger.warning(f"DOM 规则读取失败 {path}: {exc}")
+
+    merge_from(DOM_RULES_FILE)
+    merge_from(LOCAL_DOM_RULES_FILE)
+
+    privacy_words = [
+        item.strip()
+        for item in re.split(r"[,，|;；\n]+", os.getenv("APP_PRIVACY_MASK_WORDS", ""))
+        if item.strip()
+    ]
+    if privacy_words:
+        existing = list(rules.get("own_profile_fragments", []) or [])
+        rules["own_profile_fragments"] = existing + [
+            item for item in privacy_words if item not in existing
+        ]
     return rules
 
 

@@ -41,7 +41,7 @@ crontab -e
 
 当收到包含"🚨 自动化系统异常报告"的消息时：
 
-1. 立即转发给 Claude（Bamboo C 的主 agent）
+1. 立即转发给 Claude（主 agent）
 2. 消息格式：
    ```
    @Claude 自动化系统出现问题，请诊断：
@@ -167,7 +167,7 @@ def auto_fix(error_type: str):
 # 零号龙虾通知我
 openclaw message send \
   --channel telegram \
-  --target "@Bamboo C" \
+  --target "@Primary Agent" \
   --message "自动化系统异常，请查看"
 ```
 

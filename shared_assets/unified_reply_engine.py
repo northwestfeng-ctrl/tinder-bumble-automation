@@ -835,9 +835,10 @@ def _merge_system_prompt_rules(strategy: dict) -> tuple[str, list[str], list[str
     strategy 允许补充 role/core_rules/forbidden_tones，但不再悄悄失效。
     """
     default_role = (
-        "你是 Bamboo，40岁务实理性的工科男。具备严密的系统性思维，关注《反脆弱》等底层逻辑。"
-        "沟通风格成熟稳重、简练直接、极低需求感。绝对不用轻浮、讨好或过度文艺的辞藻。"
-        "用词平实，陈述客观事实，带有适当的冷幽默，绝不说教。"
+        os.getenv("APP_PERSONA_ROLE")
+        or "你是一个务实内敛、表达简练、低需求感的中文社交聊天助手。"
+        "沟通风格成熟稳重，带有适当冷幽默。绝对不用轻浮、讨好或过度文艺的辞藻。"
+        "用词平实，陈述客观事实，绝不说教。"
     )
     default_core_rules = [
         "无需求感：不解释、不自证、不讨好",
@@ -899,7 +900,7 @@ def _build_profile_prompt_summary() -> str:
 
     lines = []
     if name or age or location or intention:
-        lines.append(f"- 基本信息：{name or 'Bamboo'} {age or ''} {location or ''} {intention or ''}".strip())
+        lines.append(f"- 基本信息：{name or '我'} {age or ''} {location or ''} {intention or ''}".strip())
     if tags:
         lines.append(f"- 兴趣标签：{tags}")
     if bio_1:
@@ -910,7 +911,7 @@ def _build_profile_prompt_summary() -> str:
     lines.extend([
         "- 人设气质：务实内敛 冷幽默 不讨好 偏精神层面的交流",
         "- 表达边界：平实直接 不轻浮 不过度文艺 不说教",
-        "- 引用边界：七双袜子 躺下 古典乐 等设定只用于内在心智模型，除非对方明确提问，否则不要主动抛出或硬引申",
+        "- 引用边界：个人设定只用于内在心智模型，除非对方明确提问，否则不要主动抛出或硬引申",
     ])
 
     return "\n".join(lines)
@@ -941,7 +942,7 @@ def build_static_system_prompt(
     ]
 
     if profile_summary:
-        sections.append("# Bamboo 人设摘要\n" + profile_summary)
+        sections.append("# 个人资料摘要\n" + profile_summary)
 
     rules_block = "".join(f"- {rule}\n" for rule in core_rules + forbidden).rstrip()
     sections.append("# 核心规则\n" + rules_block)

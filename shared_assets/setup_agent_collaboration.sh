@@ -166,7 +166,7 @@ cat > "$SCRIPT_DIR/DRAGONB00_CONFIG.md" << 'EOF'
    ```
 
 3. **转发给 Claude（如果无法自动修复）**
-   发送消息给 Bamboo C：
+   发送消息给主 agent：
    ```
    @Claude 自动化系统需要你的帮助：
    

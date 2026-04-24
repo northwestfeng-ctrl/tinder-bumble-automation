@@ -9,7 +9,7 @@ bumble_inspect.py — 由 unified_orchestrator 调用，subprocess 隔离规避 
   只基于 "Your Move / 轮到您了" 候选顺序遍历，
   不套用 Tinder 的 13 + 5 滚动窗口。
 """
-import sys, time, random, json, logging
+import sys, time, random, json, logging, importlib.util, types
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -19,9 +19,7 @@ SHARED_DIR  = _SELF.parent
 TINDER_DIR   = SHARED_DIR.parent / "tinder-automation"
 BUMBLE_DIR   = SHARED_DIR.parent / "bumble-automation"
 sys.path.insert(0, str(SHARED_DIR))
-sys.path.insert(0, str(BUMBLE_DIR))
 
-from core.bumble_bot import BumbleBot
 from atomic_state import read_json_file, update_json_file, write_json_file
 from queue_db import get_reply, confirm_sent
 from unified_send_message import get_last_send_diagnostics
@@ -38,6 +36,32 @@ from runtime_feedback import record_runtime_feedback
 from conversation_store import ConversationStore, MISSING_SNAPSHOT_KEY, outcome_from_partner_followup
 
 log = logging.getLogger("BumbleInspect")
+
+
+def _load_bumble_bot_class():
+    """用独立模块名加载 Bumble Bot，避免与 Tinder 的 core 包共享命名空间。"""
+    package_name = "bumble_core"
+    module_name = f"{package_name}.bumble_bot"
+    module_path = BUMBLE_DIR / "core" / "bumble_bot.py"
+    if module_name in sys.modules:
+        return sys.modules[module_name].BumbleBot
+
+    package = sys.modules.get(package_name)
+    if package is None:
+        package = types.ModuleType(package_name)
+        package.__path__ = [str(BUMBLE_DIR / "core")]
+        sys.modules[package_name] = package
+
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载 BumbleBot: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module.BumbleBot
+
+
+BumbleBot = _load_bumble_bot_class()
 
 BUMBLE_PROFILE   = str(Path.home() / ".bumble-automation" / "test-profile")
 CORPUS_FILE      = BUMBLE_DIR / "pending_corpus.jsonl"

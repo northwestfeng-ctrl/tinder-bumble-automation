@@ -34,6 +34,8 @@ notebooklm_context.json
 notebooklm_sync_result.json
 strategy_config.review.json*
 strategy_config.json.bak
+shared_assets/dom_rules.local.json
+tinder-automation/PROFILE.md
 *.bak
 
 # Browser/debug artifacts
