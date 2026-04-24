@@ -1,0 +1,68 @@
+{
+  "version": "3.2",
+  "generated_at": "2026-04-24 07:36:29",
+  "source": "LLM演化流水线 2026-04-24 07:36:29 | source=unified_corpus_snapshot.md | id=12051245-7b42-4eb5-8b8b-c3f7db74a5e0",
+  "success_patterns": [
+    {
+      "pattern": "你禁欲吗",
+      "example": "我还没准备好回答这个问题",
+      "why_it_works": "用原话题的突兀问题直接反抛，制造悬念同时保持神秘感，强迫对方回应"
+    },
+    {
+      "pattern": "是的",
+      "example": "那就不挑了 慢慢看",
+      "why_it_works": "不追问细节，给出随性结论让对方放松，制造继续对话的悬念感"
+    },
+    {
+      "pattern": "都喜欢 哈哈",
+      "example": "选择困难是吧",
+      "why_it_works": "抓住对方模糊表态的漏洞，用调侃式诊断制造轻微冲突感，引出更多互动"
+    },
+    {
+      "pattern": "Yes",
+      "example": "好，门槛低",
+      "why_it_works": "接住对方的简短肯定，用自嘲式回应制造轻快氛围，同时延续互动节奏"
+    },
+    {
+      "pattern": "还好",
+      "example": "那算及格了",
+      "why_it_works": "用简短判定收尾一个暧昧话题，带点掌控感但不失轻松，促发对方回应"
+    }
+  ],
+  "failure_patterns": [
+    {
+      "pattern": "对方发 goodnight 或类似结束信号时发问",
+      "root_cause": "忽视对方结束对话的意图，用生硬提问强行开启话题，会让对方感到被冒犯",
+      "example": "对方发 goodnight 后问\"你在教堂工作吗\""
+    },
+    {
+      "pattern": "引用圣经或教义原文回复对方宗教话题",
+      "root_cause": "在dating软件上用布道式语言回应会让对方感到被说教，制造对立感而非亲近感",
+      "example": "对方分享圣经经文后回复\"没有人指教我，怎能明白呢？\""
+    },
+    {
+      "pattern": "对方连发两条消息后只回单字敷衍",
+      "root_cause": "对方给出完整互动信号后敷衍了事，会快速消耗对方兴趣导致对话中断",
+      "example": "对方连续回应选择困难问题，回复\"是的\"后跳过追问"
+    }
+  ],
+  "notebook_id": "1aa464d6-f7fd-41cd-b539-4392f0b57322",
+  "notebooklm_source_id": "12051245-7b42-4eb5-8b8b-c3f7db74a5e0",
+  "notebooklm_source_title": "unified_corpus_snapshot.md",
+  "runtime_feedback_snapshot": {
+    "generated_at": "2026-04-23T23:36:11.055008Z",
+    "lookback_days": 7,
+    "total_events": 9,
+    "weighted_sent_total": 2.7585,
+    "weighted_skipped_total": 1.2226,
+    "weighted_failed_total": 0.0,
+    "weighted_net_score": 1.5358,
+    "weighted_event_scores": {
+      "partner_followup_engaged": 1.5438,
+      "reply_no_safe_reply": -0.9905,
+      "reply_sent": 2.7585,
+      "partner_followup_low_info": -0.4179,
+      "reply_business_skipped": -0.2322
+    }
+  }
+}

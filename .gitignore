@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets and local config
+.env
+*.env
+!*env.example
+
+# Runtime state / private data
+*.log
+logs/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.lock
+history_baseline.json
+*_runtime_state.json
+pending_corpus.jsonl
+runtime_feedback.jsonl
+corpus_history.json
+bumble_corpus_history.json
+corpus_archive/
+notebooklm_context.json
+notebooklm_sync_result.json
+strategy_config.review.json*
+strategy_config.json.bak
+*.bak
+
+# Browser/debug artifacts
+test-profile/
+browser-profile/
+Default/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
