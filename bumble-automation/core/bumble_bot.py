@@ -229,6 +229,35 @@ class BumbleBot:
                 () => {
                     const bubbles = document.querySelectorAll('div[class*="message-bubble"]');
                     const results = [];
+                    const inferSenderFromDom = (bubble) => {
+                        const markerParts = [];
+                        let current = bubble;
+                        for (let i = 0; i < 6 && current; i++, current = current.parentElement) {
+                            markerParts.push(String(current.className || ''));
+                            markerParts.push(current.getAttribute('data-qa-role') || '');
+                            markerParts.push(current.getAttribute('data-testid') || '');
+                            markerParts.push(current.getAttribute('aria-label') || '');
+                        }
+                        const marker = markerParts.join(' ').toLowerCase();
+                        if (/(outgoing|sent|from-me|own-message|is-own|message-bubble--out|--out)/.test(marker)) {
+                            return 'me';
+                        }
+                        if (/(incoming|received|from-them|their-message|is-their|message-bubble--in|--in)/.test(marker)) {
+                            return 'them';
+                        }
+                        return '';
+                    };
+                    const fallbackSenderFromGeometry = (bubble) => {
+                        try {
+                            const rect = bubble.getBoundingClientRect();
+                            const container = bubble.parentElement?.parentElement || document.body;
+                            const containerBox = container.getBoundingClientRect();
+                            const outgoingSideStart = containerBox.left + (containerBox.width / 2);
+                            return rect.left > outgoingSideStart ? 'me' : 'them';
+                        } catch (e) {
+                            return 'them';
+                        }
+                    };
                     bubbles.forEach(bubble => {
                         const textEl = bubble.querySelector('div[class*="message-bubble__text"]');
                         if (!textEl) return;
@@ -240,31 +269,7 @@ class BumbleBot:
                         if (/^\d{4}年/.test(text)) return;
 
                         // 优先读 DOM 语义标记；坐标只作为最后兜底。
-                        let sender = 'them';
-                        const markerParts = [];
-                        let current = bubble;
-                        for (let i = 0; i < 6 && current; i++, current = current.parentElement) {
-                            markerParts.push(String(current.className || ''));
-                            markerParts.push(current.getAttribute('data-qa-role') || '');
-                            markerParts.push(current.getAttribute('data-testid') || '');
-                            markerParts.push(current.getAttribute('aria-label') || '');
-                        }
-                        const marker = markerParts.join(' ').toLowerCase();
-                        if (/(outgoing|sent|from-me|own-message|is-own|message-bubble--out|--out)/.test(marker)) {
-                            sender = 'me';
-                        } else if (/(incoming|received|from-them|their-message|is-their|message-bubble--in|--in)/.test(marker)) {
-                            sender = 'them';
-                        } else {
-                            try {
-                                const rect = bubble.getBoundingClientRect();
-                                const container = bubble.parentElement?.parentElement || document.body;
-                                const containerBox = container.getBoundingClientRect();
-                                const containerCenter = containerBox.left + (containerBox.width / 2);
-                                if (rect.left > containerCenter) {
-                                    sender = 'me';
-                                }
-                            } catch (e) {}
-                        }
+                        const sender = inferSenderFromDom(bubble) || fallbackSenderFromGeometry(bubble);
                         results.push({ sender, text });
                     });
                     return results;
@@ -361,6 +366,28 @@ class BumbleBot:
             const bubbles = Array.from(chatPanel.querySelectorAll('[class*="bubble"]'));
             const seen = new Set();
             const messages = [];
+            const inferSenderFromDom = (bubble) => {
+                const markerParts = [];
+                let current = bubble;
+                for (let i = 0; i < 6 && current; i++, current = current.parentElement) {
+                    markerParts.push(String(current.className || ''));
+                    markerParts.push(current.getAttribute('data-qa-role') || '');
+                    markerParts.push(current.getAttribute('data-testid') || '');
+                    markerParts.push(current.getAttribute('aria-label') || '');
+                }
+                const marker = markerParts.join(' ').toLowerCase();
+                if (/(outgoing|sent|from-me|own-message|is-own|message-bubble--out|--out)/.test(marker)) {
+                    return 'me';
+                }
+                if (/(incoming|received|from-them|their-message|is-their|message-bubble--in|--in)/.test(marker)) {
+                    return 'them';
+                }
+                return '';
+            };
+            const fallbackSenderFromGeometry = (bubble) => {
+                const rect = bubble.getBoundingClientRect();
+                return rect.left > window.innerWidth / 2 ? 'me' : 'them';
+            };
 
             bubbles.forEach(b => {
                 const text = (b.innerText || '').trim();
@@ -369,25 +396,8 @@ class BumbleBot:
                 if (seen.has(text)) return;
                 seen.add(text);
 
-                const markerParts = [];
-                let current = b;
-                for (let i = 0; i < 6 && current; i++, current = current.parentElement) {
-                    markerParts.push(String(current.className || ''));
-                    markerParts.push(current.getAttribute('data-qa-role') || '');
-                    markerParts.push(current.getAttribute('data-testid') || '');
-                    markerParts.push(current.getAttribute('aria-label') || '');
-                }
-                const marker = markerParts.join(' ').toLowerCase();
-                let is_mine = false;
-                if (/(outgoing|sent|from-me|own-message|is-own|message-bubble--out|--out)/.test(marker)) {
-                    is_mine = true;
-                } else if (/(incoming|received|from-them|their-message|is-their|message-bubble--in|--in)/.test(marker)) {
-                    is_mine = false;
-                } else {
-                    // 物理坐标只作为 Bumble DOM 缺少方向标记时的兜底。
-                    const rect = b.getBoundingClientRect();
-                    is_mine = rect.left > window.innerWidth / 2;
-                }
+                const sender = inferSenderFromDom(b) || fallbackSenderFromGeometry(b);
+                const is_mine = sender === 'me';
 
                 messages.push({ sender: is_mine ? 'me' : 'them', text, is_mine });
             });

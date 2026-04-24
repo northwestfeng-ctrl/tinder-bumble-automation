@@ -8,11 +8,34 @@ Bumble History Scraper
 import json
 import sys
 import time
+import importlib.util
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core.bumble_bot import BumbleBot
+
+def _load_bumble_bot_class():
+    package_name = "bumble_core"
+    module_name = f"{package_name}.bumble_bot"
+    module_path = Path(__file__).parent / "core" / "bumble_bot.py"
+    if module_name in sys.modules:
+        return sys.modules[module_name].BumbleBot
+    package = sys.modules.get(package_name)
+    if package is None:
+        package = types.ModuleType(package_name)
+        package.__path__ = [str(module_path.parent)]
+        sys.modules[package_name] = package
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载 BumbleBot: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module.BumbleBot
+
+
+BumbleBot = _load_bumble_bot_class()
 
 
 PROFILE_PATH = Path.home() / ".bumble-automation" / "test-profile"

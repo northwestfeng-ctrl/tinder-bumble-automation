@@ -509,9 +509,15 @@ def _looks_like_meta_pattern(text: str) -> bool:
 def _looks_overfit_example(text: str) -> bool:
     candidate = _clean_text(text, 80)
     suspicious_entities = (
-        "王菲", "春晚", "李白", "教会", "马克思", "福州", "厦门", "微信号", "Mabel1130",
+        "王菲", "春晚", "李白", "教会", "马克思", "微信号",
+    )
+    generic_entity_patterns = (
+        r"\b[A-Za-z][A-Za-z0-9_.-]{4,}\b",  # 账号/用户名式 token
+        r"(?:在|去|回|来自|base在)[\u4e00-\u9fff]{2,4}",  # 私有城市/所在地句式
     )
     if any(token in candidate for token in suspicious_entities):
+        return True
+    if any(re.search(pattern, candidate) for pattern in generic_entity_patterns):
         return True
     # 明显一次性数字/账号型内容
     if re.search(r"\b\d{5,}\b", candidate):
