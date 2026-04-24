@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 import logging
+import importlib.util
 from pathlib import Path
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
@@ -18,6 +20,21 @@ log = logging.getLogger("BrowserManager")
 
 _shared_playwright: Any = None
 _STALE_LOCK_PATTERNS = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+
+
+def _load_tinder_project_config():
+    module_name = "tinder_project_config"
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    module_path = Path(__file__).resolve().parent.parent / "tinder-automation" / "project_config.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载 Tinder project_config: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 @dataclass
@@ -211,9 +228,7 @@ class BrowserManager:
         launch_args = [arg for arg in launch_args if arg]
         if self.platform == "tinder":
             try:
-                from project_config import build_browser_launch_options
-
-                tinder_options = build_browser_launch_options(headless=headless)
+                tinder_options = _load_tinder_project_config().build_browser_launch_options(headless=headless)
                 merged_args = tinder_options.get("args", []) + launch_args
                 deduped_args = list(dict.fromkeys(arg for arg in merged_args if arg))
                 context_kwargs.update({
