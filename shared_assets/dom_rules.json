@@ -1,0 +1,51 @@
+{
+  "tinder_profile": {
+    "selectors": [
+      "[class*=\"profileCard\"]",
+      "[class*=\"profile-card\"]",
+      "[class*=\"matchProfile\"]",
+      "[data-testid*=\"profile\"]",
+      "[class*=\"infoCard\"]",
+      "[class*=\"userInfo\"]"
+    ],
+    "noise_fragments": [
+      "Boost",
+      "工作模式",
+      "安全工具包",
+      "看谁点了赞",
+      "近期活跃",
+      "马上配对",
+      "LIKES YOU",
+      "Messages",
+      "消息"
+    ],
+    "own_profile_fragments": [
+      "喜欢冒险和美食",
+      "冒险",
+      "美食",
+      "Travel",
+      "Music",
+      "Bamboo",
+      "40岁",
+      "四十岁",
+      "182cm",
+      "福州",
+      "带上七双袜子来找我",
+      "七双袜子",
+      "做一辈子的好朋友",
+      "躺下",
+      "生命只剩20分钟",
+      "文学",
+      "积极生活",
+      "政治",
+      "电影",
+      "爵士乐",
+      "摩羯座",
+      "长期伴侣",
+      "蓝勾认证",
+      "蓝勾",
+      "身高",
+      "cm"
+    ]
+  }
+}

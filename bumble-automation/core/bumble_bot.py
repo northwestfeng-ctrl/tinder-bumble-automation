@@ -7,8 +7,10 @@ Bumble Playwright 底层封装
 - 登录态校验
 """
 import sys
+import os
 import time
 import random
+import json
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 from playwright_stealth.stealth import Stealth  # 复用同一 stealth 引擎
@@ -18,12 +20,51 @@ from unified_send_message import send_message_unified
 from unified_reply_engine import sanitize_reply_for_send
 
 
+BUMBLE_STRATEGY_FILE = Path(
+    os.getenv(
+        "BUMBLE_STRATEGY_FILE",
+        str(Path(__file__).parent.parent / "bumble_strategy.json"),
+    )
+)
+
+DEFAULT_BUMBLE_STRATEGY = {
+    "auto_like_keywords": [],
+    "auto_like_probability": 0.3,
+    "fingerprints": [
+        {
+            "languages": ["zh-CN", "zh", "en-US", "en"],
+            "plugins": [
+                "Chrome PDF Plugin",
+                "Chrome PDF Viewer",
+                "Native Client",
+                "Chromium PDF Plugin",
+            ],
+            "webgl_vendor": "Intel Inc.",
+            "webgl_renderer": "Intel Iris OpenGL Engine",
+        }
+    ],
+}
+
+
 class BumbleBot:
     def __init__(self, profile_path: str):
         self.profile_path = profile_path
         self.browser = None
         self.context = None
         self.page = None
+        self.strategy = self._load_strategy()
+
+    @staticmethod
+    def _load_strategy() -> dict:
+        strategy = dict(DEFAULT_BUMBLE_STRATEGY)
+        try:
+            if BUMBLE_STRATEGY_FILE.exists():
+                data = json.loads(BUMBLE_STRATEGY_FILE.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    strategy.update(data)
+        except Exception as exc:
+            print(f"  [BumbleBot] 策略文件读取失败，使用默认值: {exc}")
+        return strategy
 
     # ── Stealth 参数 ──────────────────────────────
 
@@ -42,21 +83,32 @@ class BumbleBot:
 
     def _stealth_js(self) -> str:
         """注入 JS 指纹伪装，移除 automation 特征"""
-        return """
+        fingerprints = self.strategy.get("fingerprints") or DEFAULT_BUMBLE_STRATEGY["fingerprints"]
+        fingerprint = random.choice(fingerprints) if isinstance(fingerprints, list) and fingerprints else DEFAULT_BUMBLE_STRATEGY["fingerprints"][0]
+        fingerprint_json = json.dumps(fingerprint, ensure_ascii=False)
+        script = """
+        const __bumbleFingerprint = __FINGERPRINT__;
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3, 4, 5].map(() => ({
-                name: Math.random().toString(36).slice(2),
-                description: Math.random().toString(36).slice(2),
-                filename: Math.random().toString(36).slice(2)
+            get: () => (__bumbleFingerprint.plugins || []).map((name, index) => ({
+                name,
+                description: name,
+                filename: `plugin-${index}.plugin`
             }))
         });
         Object.defineProperty(navigator, 'languages', {
-            get: () => ['zh-CN', 'zh', 'en-US', 'en']
+            get: () => __bumbleFingerprint.languages || ['zh-CN', 'zh', 'en-US', 'en']
         });
         window.chrome = { runtime: {} };
+        const getParameter = WebGLRenderingContext.prototype.getParameter;
+        WebGLRenderingContext.prototype.getParameter = function(parameter) {
+            if (parameter === 37445) return __bumbleFingerprint.webgl_vendor || 'Intel Inc.';
+            if (parameter === 37446) return __bumbleFingerprint.webgl_renderer || 'Intel Iris OpenGL Engine';
+            return getParameter.call(this, parameter);
+        };
         delete navigator.__proto__['webdriver'];
         """
+        return script.replace("__FINGERPRINT__", fingerprint_json)
 
     # ── 生命周期 ──────────────────────────────────
 
@@ -187,21 +239,31 @@ class BumbleBot:
                         if (/^\d{1,2}:\d{2}$/.test(text)) return;
                         if (/^\d{4}年/.test(text)) return;
 
-                        // 物理防混淆
+                        // 优先读 DOM 语义标记；坐标只作为最后兜底。
                         let sender = 'them';
-                        try {
-                            const rect = bubble.getBoundingClientRect();
-                            const container = bubble.parentElement?.parentElement || document.body;
-                            const containerCenter = container.getBoundingClientRect().left
-                                + (container.getBoundingClientRect().width / 2);
-                            if (rect.left > containerCenter) {
-                                sender = 'me';
-                            }
-                        } catch (e) {
-                            const cls = bubble.className || '';
-                            if (cls.includes('--out') || cls.includes('me')) {
-                                sender = 'me';
-                            }
+                        const markerParts = [];
+                        let current = bubble;
+                        for (let i = 0; i < 6 && current; i++, current = current.parentElement) {
+                            markerParts.push(String(current.className || ''));
+                            markerParts.push(current.getAttribute('data-qa-role') || '');
+                            markerParts.push(current.getAttribute('data-testid') || '');
+                            markerParts.push(current.getAttribute('aria-label') || '');
+                        }
+                        const marker = markerParts.join(' ').toLowerCase();
+                        if (/(outgoing|sent|from-me|own-message|is-own|message-bubble--out|--out)/.test(marker)) {
+                            sender = 'me';
+                        } else if (/(incoming|received|from-them|their-message|is-their|message-bubble--in|--in)/.test(marker)) {
+                            sender = 'them';
+                        } else {
+                            try {
+                                const rect = bubble.getBoundingClientRect();
+                                const container = bubble.parentElement?.parentElement || document.body;
+                                const containerBox = container.getBoundingClientRect();
+                                const containerCenter = containerBox.left + (containerBox.width / 2);
+                                if (rect.left > containerCenter) {
+                                    sender = 'me';
+                                }
+                            } catch (e) {}
                         }
                         results.push({ sender, text });
                     });
@@ -307,9 +369,25 @@ class BumbleBot:
                 if (seen.has(text)) return;
                 seen.add(text);
 
-                // 按 x 位置判断是我的还是对方的
-                const rect = b.getBoundingClientRect();
-                const is_mine = rect.left > window.innerWidth / 2;
+                const markerParts = [];
+                let current = b;
+                for (let i = 0; i < 6 && current; i++, current = current.parentElement) {
+                    markerParts.push(String(current.className || ''));
+                    markerParts.push(current.getAttribute('data-qa-role') || '');
+                    markerParts.push(current.getAttribute('data-testid') || '');
+                    markerParts.push(current.getAttribute('aria-label') || '');
+                }
+                const marker = markerParts.join(' ').toLowerCase();
+                let is_mine = false;
+                if (/(outgoing|sent|from-me|own-message|is-own|message-bubble--out|--out)/.test(marker)) {
+                    is_mine = true;
+                } else if (/(incoming|received|from-them|their-message|is-their|message-bubble--in|--in)/.test(marker)) {
+                    is_mine = false;
+                } else {
+                    // 物理坐标只作为 Bumble DOM 缺少方向标记时的兜底。
+                    const rect = b.getBoundingClientRect();
+                    is_mine = rect.left > window.innerWidth / 2;
+                }
 
                 messages.push({ sender: is_mine ? 'me' : 'them', text, is_mine });
             });
@@ -473,12 +551,27 @@ class BumbleBot:
             except Exception:
                 card_text = ""
 
-            # 地域关键字优先：福建人强制喜欢，否则30%概率右滑
-            if "福建" in card_text:
+            auto_like_keywords = [
+                str(keyword).strip()
+                for keyword in self.strategy.get("auto_like_keywords", [])
+                if str(keyword).strip()
+            ]
+            like_probability = self.strategy.get("auto_like_probability", 0.3)
+            try:
+                like_probability = float(like_probability)
+            except Exception:
+                like_probability = 0.3
+            like_probability = max(0.0, min(1.0, like_probability))
+
+            matched_keyword = next(
+                (keyword for keyword in auto_like_keywords if keyword in card_text),
+                "",
+            )
+            if matched_keyword:
                 is_like = True
-                print(f"  [{i+1}] 检测到福建关键字，强制喜欢")
+                print(f"  [{i+1}] 命中策略关键字「{matched_keyword}」，强制喜欢")
             else:
-                is_like = random.random() < 0.3
+                is_like = random.random() < like_probability
 
             try:
                 if is_like:

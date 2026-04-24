@@ -78,6 +78,7 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger("Orchestrator")
+_shutdown_flag = threading.Event()
 
 from config import get_config
 from unified_reply_engine import (
@@ -137,6 +138,25 @@ def _send_telegram_summary(message: str) -> None:
 
 def _cycle_stamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _request_shutdown(sig: int | None = None) -> None:
+    if sig is not None:
+        log.info(f"收到信号 {sig}，准备退出")
+    _shutdown_flag.set()
+
+
+def _sleep_interruptibly(seconds: float, reason: str = "") -> bool:
+    """按秒切片休眠，保证 SIGTERM/重启请求不会被长冷却阻塞。"""
+    deadline = time.time() + max(0.0, float(seconds))
+    while not _shutdown_flag.is_set():
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return True
+        time.sleep(min(1.0, remaining))
+    if reason:
+        log.info(f"[Sleep] 中断休眠: {reason}")
+    return False
 
 
 def _notify_run_result(title: str, details: list[str]) -> None:
@@ -420,7 +440,7 @@ def run_loop():
                 f"后续: 挂起 {sleep_secs // 60 if sleep_secs >= 60 else sleep_secs} {'分钟' if sleep_secs >= 60 else '秒'}，等待 {wake_platform} 恢复",
             ],
         )
-        time.sleep(max(1, sleep_secs))
+        _sleep_interruptibly(max(1, sleep_secs), "backend cooldown")
 
     def _enter_backend_backoff(platform: str) -> None:
         backend_backoff_until[platform] = time.time() + BACKEND_BACKOFF_SECONDS
@@ -450,7 +470,7 @@ def run_loop():
                 ],
             )
 
-    while True:
+    while not _shutdown_flag.is_set():
         # ── 0. 宵禁检查 ──────────────────────────────────────
         if is_curfew():
             log.info("[Curfew] 03:00-08:00 深夜演化时段，回复任务挂起...")
@@ -465,7 +485,8 @@ def run_loop():
             if is_curfew():
                 sleep_secs = next_wake_time()
                 log.info(f"[Curfew] 演化完成，挂起至 08:00 ({sleep_secs:.0f}s)")
-                time.sleep(max(sleep_secs, 300))
+                if not _sleep_interruptibly(max(sleep_secs, 300), "curfew"):
+                    break
             else:
                 log.info("[Curfew] 演化完成，已离开宵禁窗口，立即恢复巡检")
             current_platform = 'TINDER'
@@ -501,7 +522,8 @@ def run_loop():
                         "后续: 休眠 1 分钟后继续",
                     ],
                 )
-                time.sleep(60)
+                if not _sleep_interruptibly(60, "tinder replied cooldown"):
+                    break
                 continue
             elif replied_count == -1:
                 _enter_backend_backoff('TINDER')
@@ -529,7 +551,8 @@ def run_loop():
                         "后续: 休眠 1 分钟后继续",
                     ],
                 )
-                time.sleep(60)
+                if not _sleep_interruptibly(60, "bumble replied cooldown"):
+                    break
                 continue
             elif replied_count == -1:
                 _enter_backend_backoff('BUMBLE')
@@ -542,7 +565,8 @@ def run_loop():
                 # 设计选择：双平台静默摘要不发 Telegram，也不在进程重启后补发；
                 # Telegram 只用于回复成功、后端异常、演化结果等需要人工关注的事件。
                 log.info(" [Notify] 双平台无新消息，跳过 Telegram 静默摘要")
-                time.sleep(cooldown * 60)
+                if not _sleep_interruptibly(cooldown * 60, "quiet cooldown"):
+                    break
                 current_platform = 'TINDER'
                 continue
 
@@ -552,8 +576,7 @@ def run_loop():
 # ─────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     def _sig_handler(sig, frame):
-        log.info(f"收到信号 {sig}，退出")
-        sys.exit(0)
+        _request_shutdown(sig)
     signal.signal(signal.SIGINT,  _sig_handler)
     signal.signal(signal.SIGTERM, _sig_handler)
 

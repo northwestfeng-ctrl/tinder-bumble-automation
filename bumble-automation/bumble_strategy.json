@@ -1,0 +1,40 @@
+{
+  "auto_like_keywords": [
+    "福建"
+  ],
+  "auto_like_probability": 0.3,
+  "fingerprints": [
+    {
+      "languages": [
+        "zh-CN",
+        "zh",
+        "en-US",
+        "en"
+      ],
+      "plugins": [
+        "Chrome PDF Plugin",
+        "Chrome PDF Viewer",
+        "Native Client",
+        "Chromium PDF Plugin"
+      ],
+      "webgl_vendor": "Intel Inc.",
+      "webgl_renderer": "Intel Iris OpenGL Engine"
+    },
+    {
+      "languages": [
+        "zh-CN",
+        "zh",
+        "en-US",
+        "en"
+      ],
+      "plugins": [
+        "PDF Viewer",
+        "Chrome PDF Viewer",
+        "Chromium PDF Viewer",
+        "Native Client"
+      ],
+      "webgl_vendor": "Apple Inc.",
+      "webgl_renderer": "Apple M-Series GPU"
+    }
+  ]
+}

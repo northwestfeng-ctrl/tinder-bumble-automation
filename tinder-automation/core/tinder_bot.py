@@ -62,6 +62,75 @@ CONFIG = build_tinder_config(load_strategy())
 logger = logging.getLogger("tinder_bot")
 TINDER_BASELINE_FILE = Path(__file__).parent.parent / "history_baseline.json"
 TINDER_RUNTIME_STATE_FILE = Path(__file__).parent.parent / "tinder_runtime_state.json"
+DOM_RULES_FILE = Path(os.getenv("APP_DOM_RULES_FILE", str(SHARED_ASSETS_ROOT / "dom_rules.json")))
+
+DEFAULT_TINDER_PROFILE_DOM_RULES = {
+    "selectors": [
+        '[class*="profileCard"]',
+        '[class*="profile-card"]',
+        '[class*="matchProfile"]',
+        '[data-testid*="profile"]',
+        '[class*="infoCard"]',
+        '[class*="userInfo"]',
+    ],
+    "noise_fragments": [
+        "Boost",
+        "工作模式",
+        "安全工具包",
+        "看谁点了赞",
+        "近期活跃",
+        "马上配对",
+        "LIKES YOU",
+        "Messages",
+        "消息",
+    ],
+    "own_profile_fragments": [
+        "喜欢冒险和美食",
+        "冒险",
+        "美食",
+        "Travel",
+        "Music",
+        "Bamboo",
+        "40岁",
+        "四十岁",
+        "182cm",
+        "福州",
+        "带上七双袜子来找我",
+        "七双袜子",
+        "做一辈子的好朋友",
+        "躺下",
+        "生命只剩20分钟",
+        "文学",
+        "积极生活",
+        "政治",
+        "电影",
+        "爵士乐",
+        "摩羯座",
+        "长期伴侣",
+        "蓝勾认证",
+        "蓝勾",
+        "身高",
+        "cm",
+    ],
+}
+
+
+def _load_dom_rule_section(section: str) -> dict:
+    defaults = DEFAULT_TINDER_PROFILE_DOM_RULES if section == "tinder_profile" else {}
+    rules = {key: list(value) if isinstance(value, list) else value for key, value in defaults.items()}
+    try:
+        if DOM_RULES_FILE.exists():
+            data = json.loads(DOM_RULES_FILE.read_text(encoding="utf-8"))
+            section_data = data.get(section, {}) if isinstance(data, dict) else {}
+            if isinstance(section_data, dict):
+                for key, value in section_data.items():
+                    if isinstance(value, list):
+                        rules[key] = value
+                    elif value is not None:
+                        rules[key] = value
+    except Exception as exc:
+        logger.warning(f"DOM 规则读取失败，使用默认值: {exc}")
+    return rules
 
 
 def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int | None = None) -> int:
@@ -154,6 +223,27 @@ class TinderBot:
             self._log("warning", f"[Tinder] 重建浏览器实例失败: {e}")
             return False
 
+    @staticmethod
+    def _is_target_closed_error(exc: Exception) -> bool:
+        exc_type = type(exc).__name__.lower()
+        message = str(exc).lower()
+        return (
+            "targetclosed" in exc_type
+            or "target page" in message and "closed" in message
+            or "browser has been closed" in message
+            or "context has been closed" in message
+        )
+
+    def _handle_webdriver_exception(self, exc: Exception, context: str) -> bool:
+        """浏览器/页面对象失效时立刻重建，避免普通 except 把真实故障吞掉。"""
+        if not self._is_target_closed_error(exc):
+            return False
+        self._log("warning", f"[Tinder] Playwright target 已关闭，触发重建: {context} | {exc}")
+        rebuilt = self._rebuild_browser_instance(context)
+        if rebuilt:
+            raise TinderBackendError(f"浏览器 target 关闭，已重建: {context}") from exc
+        raise TinderBackendError(f"浏览器 target 关闭且重建失败: {context}") from exc
+
     def _recover_message_surface(self) -> bool:
         """消息页自愈：刷新 -> 直达 messages -> tab deep link -> 最近会话深链 -> 重建浏览器。"""
         direct_message_url = "https://tinder.com/app/messages"
@@ -198,6 +288,7 @@ class TinderBot:
                     self._log("info", f"[Tinder] 消息页恢复成功: {step_name}")
                     return True
             except Exception as e:
+                self._handle_webdriver_exception(e, f"recover_message_surface {step_name}")
                 self._log("warning", f"[Tinder] 恢复步骤失败 {step_name}: {e}")
 
         return False
@@ -619,7 +710,14 @@ class TinderBot:
         for item in tail:
             sender = item.get("sender", "")
             text = " ".join((item.get("text", "") or "").split())
-            normalized.append((sender, text))
+            cursor = (
+                item.get("message_key")
+                or item.get("timestamp")
+                or item.get("datetime")
+                or item.get("id")
+                or text
+            )
+            normalized.append((sender, str(cursor), text))
         return tuple(normalized)
 
     def _get_dormant_reactivation_candidate(self, match_id: str, match_name: str, messages: list) -> tuple[bool, str]:
@@ -1274,6 +1372,7 @@ class TinderBot:
                         )
                         self._log("info", f"[Tinder] 聊天面板已出现，当前 URL: {self.page.url}")
                     except Exception as e:
+                        self._handle_webdriver_exception(e, "check_new_matches wait_chat")
                         self._log(
                             "warning",
                             f"[Tinder] 等待聊天面板超时: {e}; 页面摘要: {self._page_text_preview()}",
@@ -1351,6 +1450,7 @@ class TinderBot:
                     self._log("info", f"[Tinder] 已返回新配对入口页，当前 URL: {self.page.url}")
 
                 except Exception as e:
+                    self._handle_webdriver_exception(e, "check_new_matches item")
                     self._log("warning", f"处理新匹配卡片失败: {e}")
                     if not self._open_new_matches_surface():
                         break
@@ -1358,6 +1458,7 @@ class TinderBot:
 
             return sent_count
         except Exception as e:
+            self._handle_webdriver_exception(e, "check_new_matches")
             self._log("warning", f"[Tinder] 检查新配对失败: {e}")
             return sent_count
 
@@ -1566,6 +1667,7 @@ class TinderBot:
 
                     time.sleep(3)  # 等待 SPA 切换渲染完成
                 except Exception as click_err:
+                    self._handle_webdriver_exception(click_err, "navigate_to_messages tab click")
                     self._log("warning", f"点击消息标签未命中: {click_err}")
                     # 备选：依次尝试真正的消息路由和 tab deep link
                     for fallback_url in (direct_message_url, tab_message_url):
@@ -1576,7 +1678,8 @@ class TinderBot:
                             messages_tab_selected = self._messages_tab_is_selected()
                             if has_message_list or messages_tab_selected:
                                 break
-                        except Exception:
+                        except Exception as fallback_exc:
+                            self._handle_webdriver_exception(fallback_exc, "navigate_to_messages fallback")
                             continue
 
             has_message_list = self._conversation_anchor_count() > 0
@@ -1592,6 +1695,7 @@ class TinderBot:
             HumanDelay.think()
             return True
         except Exception as e:
+            self._handle_webdriver_exception(e, "navigate_to_messages")
             self._log("error", f"导航消息页面失败: {e}")
             return False
 
@@ -1606,6 +1710,23 @@ class TinderBot:
                 if (!chatLog) return [];
 
                 const result = [];
+                const messageMeta = (node, sender, text) => {
+                    const metaNode = node.closest('[role="article"], [role="listitem"], [data-testid], [data-qa-id], [data-id], [id]') || node.parentElement;
+                    const timeEl = metaNode ? metaNode.querySelector('time[datetime], [datetime]') : null;
+                    const timestamp = timeEl ? (timeEl.getAttribute('datetime') || '') : '';
+                    const nodeId = metaNode ? (
+                        metaNode.getAttribute('data-id') ||
+                        metaNode.getAttribute('data-qa-id') ||
+                        metaNode.getAttribute('data-testid') ||
+                        metaNode.getAttribute('id') ||
+                        ''
+                    ) : '';
+                    const cursor = nodeId || timestamp;
+                    return {
+                        timestamp,
+                        message_key: cursor ? `${sender}:${cursor}:${text}` : ''
+                    };
+                };
 
                 // 1) span.text 消息（正文文本，去除 timestamp/label 等 UI 干扰）
                 const spans = chatLog.querySelectorAll('span.text');
@@ -1631,7 +1752,8 @@ class TinderBot:
                         const color = window.getComputedStyle(span).color;
                         if (color.includes('255, 255, 255')) is_mine = true;
                     }
-                    result.push({ text, sender: is_mine ? 'me' : 'them', is_mine });
+                    const sender = is_mine ? 'me' : 'them';
+                    result.push({ text, sender, is_mine, ...messageMeta(span, sender, text) });
                 });
 
                 // 2) 图片/GIF 附件（不在 span.text 内，用 img 检测）
@@ -1648,13 +1770,20 @@ class TinderBot:
                         const style = window.getComputedStyle(container);
                         if (style.justifyContent === 'flex-end' || style.alignItems === 'flex-end') is_mine = true;
                     }
-                    result.push({ text: '[收到一个图片/GIF表情]', sender: is_mine ? 'me' : 'them', is_mine });
+                    const text = '[收到一个图片/GIF表情]';
+                    const sender = is_mine ? 'me' : 'them';
+                    result.push({ text, sender, is_mine, ...messageMeta(img, sender, text) });
                 });
 
                 // 3) 去重
                 const unique = [];
                 for (let i = 0; i < result.length; i++) {
-                    if (unique.length > 0 && unique[unique.length - 1].text === result[i].text) continue;
+                    const prev = unique[unique.length - 1];
+                    if (
+                        prev &&
+                        prev.text === result[i].text &&
+                        (!result[i].message_key || prev.message_key === result[i].message_key)
+                    ) continue;
                     unique.push(result[i]);
                 }
                 return unique;
@@ -1943,6 +2072,7 @@ class TinderBot:
                 continue
 
             except Exception as e:
+                self._handle_webdriver_exception(e, f"check_all_contacts #{index + 1}")
                 self._log("warning", f"#{index + 1} 异常: {e}")
                 continue
 
@@ -2103,6 +2233,7 @@ class TinderBot:
                     )
                     self._log("warning", f"[激活] ❌ 激活发送失败: {candidate['match_name']}")
                 except Exception as e:
+                    self._handle_webdriver_exception(e, f"dormant reactivation {candidate.get('match_name', 'Unknown')}")
                     self._log("warning", f"[激活] 沉睡联系人激活异常: {e}")
             self._advance_dormant_scan_cursor(last_attempted_dormant_key)
         elif base_window > 0 and not found_unreplied_in_window and total_sent_so_far > 0:
@@ -2505,7 +2636,14 @@ class TinderBot:
                 for item in tail:
                     sender = item.get('sender', '')
                     text = ' '.join((item.get('text', '') or '').split())
-                    normalized.append((sender, text))
+                    cursor = (
+                        item.get("message_key")
+                        or item.get("timestamp")
+                        or item.get("datetime")
+                        or item.get("id")
+                        or text
+                    )
+                    normalized.append((sender, str(cursor), text))
                 return tuple(normalized)
 
             current_sig = _tail_signature(messages)
@@ -2559,60 +2697,27 @@ class TinderBot:
         严格限定在 aside 或右侧面板范围内，绝不查询聊天区域。
         提取后硬清洗已知己方资料片段，防止泄露进 LLM 上下文。
         """
-        NOISE_FRAGMENTS = [
-            "Boost",
-            "工作模式",
-            "安全工具包",
-            "看谁点了赞",
-            "近期活跃",
-            "马上配对",
-            "LIKES YOU",
-            "Messages",
-            "消息",
+        dom_rules = _load_dom_rule_section("tinder_profile")
+        noise_fragments = [
+            str(item).strip()
+            for item in dom_rules.get("noise_fragments", [])
+            if str(item).strip()
         ]
-        OWN_PROFILE_FRAGMENTS = [
-            "喜欢冒险和美食",
-            "冒险",
-            "美食",
-            "Travel",
-            "Music",
-            # 己方真实资料（防止泄露进 LLM 上下文）
-            "Bamboo",
-            "40岁",
-            "四十岁",
-            "182cm",
-            "福州",
-            "带上七双袜子来找我",
-            "七双袜子",
-            "做一辈子的好朋友",
-            "躺下",
-            "生命只剩20分钟",
-            "文学",
-            "积极生活",
-            "政治",
-            "电影",
-            "爵士乐",
-            "摩羯座",
-            "长期伴侣",
-            "蓝勾认证",
-            "蓝勾",
-            "身高",
-            "cm",
+        own_profile_fragments = [
+            str(item).strip()
+            for item in dom_rules.get("own_profile_fragments", [])
+            if str(item).strip()
+        ]
+        selectors = [
+            str(item).strip()
+            for item in dom_rules.get("selectors", [])
+            if str(item).strip()
         ]
 
         bio = self.page.evaluate(r"""
-            () => {
-                const NOISE_PATTERNS = [
-                    /Boost/i,
-                    /工作模式/,
-                    /安全工具包/,
-                    /看谁点了赞/,
-                    /近期活跃/,
-                    /马上配对/,
-                    /LIKES YOU/i,
-                    /^Messages$/i,
-                    /^消息$/,
-                ];
+            (rules) => {
+                const noiseFragments = rules.noiseFragments || [];
+                const selectors = rules.selectors || [];
 
                 const extractText = (root) => {
                     if (!root) return '';
@@ -2644,17 +2749,17 @@ class TinderBot:
                     if (!text) return true;
                     const compact = text.replace(/\s+/g, ' ').trim();
                     if (!compact || compact.length < 6) return true;
-                    return NOISE_PATTERNS.some((pattern) => pattern.test(compact));
+                    return noiseFragments.some((fragment) => {
+                        const item = String(fragment || '').trim();
+                        if (!item) return false;
+                        const compactLower = compact.toLowerCase();
+                        const itemLower = item.toLowerCase();
+                        if (itemLower === 'messages' || item === '消息') {
+                            return compactLower === itemLower;
+                        }
+                        return compactLower.includes(itemLower);
+                    });
                 };
-
-                const selectors = [
-                    '[class*="profileCard"]',
-                    '[class*="profile-card"]',
-                    '[class*="matchProfile"]',
-                    '[data-testid*="profile"]',
-                    '[class*="infoCard"]',
-                    '[class*="userInfo"]',
-                ];
 
                 for (const sel of selectors) {
                     const nodes = Array.from(document.querySelectorAll(sel));
@@ -2670,11 +2775,11 @@ class TinderBot:
                 if (isNoisy(asideText)) return '';
                 return asideText;
             }
-        """)
+        """, {"selectors": selectors, "noiseFragments": noise_fragments})
 
-        for frag in NOISE_FRAGMENTS:
+        for frag in noise_fragments:
             bio = bio.replace(frag, "")
-        for frag in OWN_PROFILE_FRAGMENTS:
+        for frag in own_profile_fragments:
             bio = bio.replace(frag, '')
         bio = ' | '.join([s.strip() for s in bio.split('|') if s.strip()])
         return bio
