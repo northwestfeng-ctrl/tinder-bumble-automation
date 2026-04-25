@@ -917,6 +917,27 @@ class TinderBot:
         except Exception:
             return 0
 
+    def _message_list_has_native_empty_state(self) -> bool:
+        """区分真实空列表和 Tinder 前端/后端空载故障。"""
+        try:
+            text = self.page.evaluate(
+                """() => {
+                    const root = document.querySelector('[class*=sidebar]') || document.body;
+                    return (root && root.innerText || '').replace(/\\s+/g, ' ').trim();
+                }"""
+            )
+        except Exception:
+            return False
+        candidate = str(text or "")
+        if not candidate:
+            return False
+        empty_markers = (
+            "开始滑动", "暂无消息", "没有消息", "还没有配对", "没有配对",
+            "Start swiping", "No messages", "No Matches", "No matches",
+            "Matches will appear", "New matches will appear",
+        )
+        return any(marker in candidate for marker in empty_markers)
+
     def _messages_tab_is_selected(self) -> bool:
         try:
             selected = self.page.evaluate(
@@ -1845,8 +1866,14 @@ class TinderBot:
                 raise TinderBackendError("消息列表加载中（Tinder 后端问题）")
 
         if not self._wait_for_message_cards():
+            if self._message_list_has_native_empty_state():
+                self._log("info", "Tinder 消息列表为原生空状态，本轮无可巡检联系人")
+                return 0
             self._log("warning", "消息卡片仍为空，尝试主动恢复消息页")
             if not self._recover_message_surface() or self._conversation_anchor_count() == 0:
+                if self._message_list_has_native_empty_state():
+                    self._log("info", "Tinder 消息列表恢复后确认原生空状态，本轮无可巡检联系人")
+                    return 0
                 self._log("warning", "消息列表空载（Tinder 后端/UI 状态异常），跳过本轮巡检")
                 raise TinderBackendError("消息列表空载（Tinder 后端/UI 状态异常）")
 

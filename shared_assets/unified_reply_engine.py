@@ -126,6 +126,12 @@ SYSTEM_CONTEXT_TEXTS = {
     "轮到您了",
     "轮到你了",
 }
+SYSTEM_CONTEXT_FRAGMENT_PATTERN = re.compile(
+    r"(liked (?:your|one of your) messages?|reacted to your message|赞了你的消息|点赞了你的消息|"
+    r"your move|轮到[您你]了|has extended the match|extended the match|"
+    r"match (?:expires|extended)|chat (?:expires|will expire)|el chat finaliza)",
+    re.IGNORECASE,
+)
 
 
 def _looks_english_text(text: str) -> bool:
@@ -143,7 +149,11 @@ def _is_system_context_text(text: str) -> bool:
     if not candidate:
         return True
     lowered = candidate.lower()
-    return bool(SYSTEM_CONTEXT_TAG_PATTERN.fullmatch(candidate)) or lowered in SYSTEM_CONTEXT_TEXTS
+    return (
+        bool(SYSTEM_CONTEXT_TAG_PATTERN.fullmatch(candidate))
+        or lowered in SYSTEM_CONTEXT_TEXTS
+        or (len(candidate) <= 100 and bool(SYSTEM_CONTEXT_FRAGMENT_PATTERN.search(candidate)))
+    )
 
 
 def _is_contextual_partner_message(item: dict) -> bool:
@@ -2060,15 +2070,42 @@ def click_contact(page, entry: dict, platform: str = "tinder") -> bool:
 
     elif platform == "bumble":
         uid = entry.get("uid", "")
+        name = str(entry.get("name", "") or "").strip()
         cx  = entry.get("x", 0) + adapter.click_offset_x
         cy  = entry.get("y", 0) + adapter.click_offset_y
 
-        if adapter.requires_uid and uid:
-            page.locator(f'[data-qa-uid="{uid}"]').first.click(
-                force=True, timeout=5000
-            )
-        else:
-            page.mouse.click(cx, cy)
+        def _click_uid(timeout: int = 5000) -> bool:
+            if not (adapter.requires_uid and uid):
+                return False
+            locator = page.locator(f'[data-qa-uid="{uid}"]').first
+            locator.wait_for(state="attached", timeout=timeout)
+            locator.scroll_into_view_if_needed(timeout=timeout)
+            locator.click(force=True, timeout=timeout)
+            return True
+
+        def _click_name(timeout: int = 5000) -> bool:
+            if not name:
+                return False
+            locator = page.locator(".contact").filter(has_text=re.compile(re.escape(name))).first
+            locator.wait_for(state="attached", timeout=timeout)
+            locator.scroll_into_view_if_needed(timeout=timeout)
+            locator.click(force=True, timeout=timeout)
+            return True
+
+        try:
+            if not _click_uid():
+                page.mouse.click(cx, cy)
+        except Exception as first_exc:
+            log.warning(f"[URE] Bumble 联系人点击失效，刷新列表后重抓: {name or uid} | {first_exc}")
+            try:
+                target_url = page.url if "/app/connections" in (page.url or "") else "https://eu1.bumble.com/app/connections"
+                page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
+                time.sleep(2)
+                if not _click_uid(timeout=7000) and not _click_name(timeout=5000):
+                    page.mouse.click(cx, cy)
+            except Exception as retry_exc:
+                log.warning(f"[URE] Bumble 联系人重试点击失败: {name or uid} | {retry_exc}")
+                return False
 
         # 关闭通知面板（如果有）
         try:
