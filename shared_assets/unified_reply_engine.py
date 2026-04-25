@@ -113,6 +113,19 @@ CONTINUE_SIGNAL_PATTERN = re.compile(
     r'|(等会|等我|待会|回头继续|之后继续|回来说|再说说|再讲讲|继续聊|回来聊)',
     re.IGNORECASE,
 )
+SYSTEM_CONTEXT_TAG_PATTERN = re.compile(r"^\s*\[[^\[\]\n]{1,80}\]\s*$")
+SYSTEM_CONTEXT_TEXTS = {
+    REACTION_LIKE_CANONICAL_TEXT.lower(),
+    "[赞了你的消息]",
+    "赞了你的消息",
+    "点赞了你的消息",
+    "liked your message",
+    "liked one of your messages",
+    "reacted to your message",
+    "your move",
+    "轮到您了",
+    "轮到你了",
+}
 
 
 def _looks_english_text(text: str) -> bool:
@@ -122,6 +135,26 @@ def _looks_english_text(text: str) -> bool:
     latin = len(re.findall(r"[A-Za-z]", candidate))
     cjk = len(re.findall(r"[\u4e00-\u9fff]", candidate))
     return latin > 0 and cjk == 0
+
+
+def _is_system_context_text(text: str) -> bool:
+    """Reaction/system labels are metadata, not the partner's natural language."""
+    candidate = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not candidate:
+        return True
+    lowered = candidate.lower()
+    return bool(SYSTEM_CONTEXT_TAG_PATTERN.fullmatch(candidate)) or lowered in SYSTEM_CONTEXT_TEXTS
+
+
+def _is_contextual_partner_message(item: dict) -> bool:
+    """True only for real partner text that should influence language/context heuristics."""
+    msg = item or {}
+    if msg.get("sender") == "me" or msg.get("is_mine") is True:
+        return False
+    meta_type = str(msg.get("meta_type", "") or "").strip().lower()
+    if meta_type in {"reaction_like", "system", "system_message", "status"}:
+        return False
+    return not _is_system_context_text(msg.get("text", ""))
 
 
 def _clip_reply(text: str, max_len: int = 50) -> str:
@@ -202,22 +235,22 @@ def build_contextual_fallback_reply(
             return _clip_reply("You do have a memorable profile", max_len)
         return _clip_reply("先打个招呼 你这张有点会拍", max_len)
 
-    last_msg = next(
-        (
-            item or {}
-            for item in reversed(messages or [])
-            if (item or {}).get("sender") != "me" and (item or {}).get("is_mine") is not True
-        ),
-        messages[-1] or {},
-    )
+    partner_messages = [
+        item or {}
+        for item in (messages or [])
+        if _is_contextual_partner_message(item or {})
+    ]
+    if not partner_messages:
+        return None
+
+    last_msg = partner_messages[-1]
     last_text = re.sub(r"\s+", " ", (last_msg.get("text", "") or "")).strip()
     if not last_text:
         return None
 
     recent_partner_text = " ".join(
         re.sub(r"\s+", " ", str((item or {}).get("text", "") or "")).strip()
-        for item in (messages or [])[-4:]
-        if (item or {}).get("sender") != "me" and (item or {}).get("is_mine") is not True
+        for item in partner_messages[-4:]
     )
     english = _looks_english_text(last_text) and not _contains_cjk_text(recent_partner_text or last_text)
     normalized = last_text.lower()
@@ -1652,8 +1685,7 @@ def _cjk_bigrams(text: str) -> set[str]:
 
 def _last_partner_text(messages: Optional[list[dict]]) -> str:
     for msg in reversed(messages or []):
-        sender = msg.get("sender")
-        if sender == "me" or msg.get("is_mine") is True:
+        if not _is_contextual_partner_message(msg or {}):
             continue
         text = re.sub(r"\s+", " ", (msg.get("text", "") or "")).strip()
         if text:

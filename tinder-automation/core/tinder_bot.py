@@ -1844,7 +1844,11 @@ class TinderBot:
                 self._log("warning", "消息列表仍在转圈（Tinder 后端问题），跳过本轮巡检")
                 raise TinderBackendError("消息列表加载中（Tinder 后端问题）")
 
-        self._wait_for_message_cards()
+        if not self._wait_for_message_cards():
+            self._log("warning", "消息卡片仍为空，尝试主动恢复消息页")
+            if not self._recover_message_surface() or self._conversation_anchor_count() == 0:
+                self._log("warning", "消息列表空载（Tinder 后端/UI 状态异常），跳过本轮巡检")
+                raise TinderBackendError("消息列表空载（Tinder 后端/UI 状态异常）")
 
         for _ in range(5):
             prev_count = 0
