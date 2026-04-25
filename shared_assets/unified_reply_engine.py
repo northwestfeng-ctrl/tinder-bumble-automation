@@ -218,6 +218,14 @@ def build_contextual_fallback_reply(
     if any(token in last_text for token in ("谢谢", "多谢")) or "thank" in normalized:
         return _clip_reply("I'll take that" if english else "这句我先收下", max_len)
 
+    recent_partner_text = " ".join(
+        re.sub(r"\s+", " ", str((item or {}).get("text", "") or "")).strip()
+        for item in (messages or [])[-4:]
+        if (item or {}).get("sender") != "me" and (item or {}).get("is_mine") is not True
+    )
+    if _contains_cjk_text(recent_partner_text) and any(token in recent_partner_text for token in ("照片", "本人", "可爱")):
+        return _clip_reply("本人 但你这么夸我有点难接", max_len)
+
     if any(token in normalized for token in ("hi", "hello", "hey")) or any(token in last_text for token in ("嗨", "哈喽")):
         if platform_key == "bumble" and any(token in bio_text for token in ("牛肉丸", "肉丸")):
             return _clip_reply("your name just made me hungry" if english else "你这个名字有点太下饭了", max_len)
@@ -1824,6 +1832,22 @@ def _looks_like_weak_chinese_reply(text: str, messages: Optional[list[dict]] = N
     return False
 
 
+def _violates_recent_partner_language(text: str, messages: Optional[list[dict]] = None) -> bool:
+    """Hard-stop obvious language drift after a recent CJK partner message."""
+    candidate = re.sub(r"\s+", " ", (text or "")).strip()
+    if not candidate or not messages:
+        return False
+    last_text = _last_partner_text(messages)
+    if not _contains_cjk_text(last_text):
+        return False
+    if _contains_cjk_text(candidate):
+        return False
+    if _looks_english_text(candidate):
+        log.warning(f"[URE] 回复语言未跟随最近中文入站: last={last_text[:40]} reply={candidate[:80]}")
+        return True
+    return False
+
+
 def _safety_filter_reply(text: str, max_len: int, messages: Optional[list[dict]] = None) -> str:
     """最终出站安全过滤，可疑内容直接降级为安全短句。"""
     if not text:
@@ -1834,6 +1858,10 @@ def _safety_filter_reply(text: str, max_len: int, messages: Optional[list[dict]]
 
     if _looks_like_analysis(clean):
         log.warning(f"[URE] ⚠️ 检测到思维链/分析文本，改用安全兜底: {clean[:80]}")
+        return SAFE_FALLBACK_REPLY
+
+    if _violates_recent_partner_language(clean, messages):
+        log.warning(f"[URE] ⚠️ 检测到回复语言漂移，拒绝发送: {clean[:80]}")
         return SAFE_FALLBACK_REPLY
 
     if _looks_like_weak_english_reply(clean, messages):
