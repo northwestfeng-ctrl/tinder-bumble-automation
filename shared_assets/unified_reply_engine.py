@@ -179,9 +179,10 @@ def build_contextual_fallback_reply(
     - 新配对：基于 bio 给一个轻量开场，不再硬发“忙晚点聊”
     - 已有对话：尽量给轻接话；若没有把握，再返回 None 交由上层跳过
     """
-    del age, platform  # 预留给后续更细粒度兜底
+    del age
 
     bio_text = re.sub(r"\s+", " ", (bio or "")).strip()
+    platform_key = str(platform or "").lower()
     if not messages:
         cue_text = bio_text.lower()
         english_bio = _looks_english_text(bio_text)
@@ -218,6 +219,10 @@ def build_contextual_fallback_reply(
         return _clip_reply("I'll take that" if english else "这句我先收下", max_len)
 
     if any(token in normalized for token in ("hi", "hello", "hey")) or any(token in last_text for token in ("嗨", "哈喽")):
+        if platform_key == "bumble" and any(token in bio_text for token in ("牛肉丸", "肉丸")):
+            return _clip_reply("your name just made me hungry" if english else "你这个名字有点太下饭了", max_len)
+        if platform_key == "bumble":
+            return _clip_reply("hey, good timing" if english else "来得刚好 我接住了", max_len)
         return _clip_reply("Right on time" if english else "来得刚好 我接住了", max_len)
 
     if len(last_text) >= 4:
@@ -409,7 +414,30 @@ def _contains_prompt_marker(text: str) -> bool:
     return False
 
 
-def should_skip_low_info_followup(messages: list[dict]) -> tuple[bool, str]:
+def _is_bumble_light_greeting_followup(
+    messages: list[dict],
+    *,
+    last_text: str,
+    platform: str | None = None,
+) -> bool:
+    """Bumble marks these as "Your Move"; a simple greeting is still actionable."""
+    if str(platform or "").lower() != "bumble":
+        return False
+    normalized = re.sub(r"\s+", " ", str(last_text or "")).strip().lower()
+    if normalized not in {item.lower() for item in GREETING_REPLY_TEXTS}:
+        return False
+    if len(messages) < 2:
+        return True
+    prev_msg = messages[-2] or {}
+    if prev_msg.get("sender") != "me" and prev_msg.get("is_mine") is not True:
+        return False
+    prev_text = re.sub(r"\s+", "", str(prev_msg.get("text", "") or ""))
+    # Only rescue the opening/low-commitment turn; longer prior messages keep
+    # the normal low-info anti-chasing guard.
+    return len(prev_text) <= 8
+
+
+def should_skip_low_info_followup(messages: list[dict], *, platform: str | None = None) -> tuple[bool, str]:
     """
     统一的低信息回复拦截。
 
@@ -446,6 +474,9 @@ def should_skip_low_info_followup(messages: list[dict]) -> tuple[bool, str]:
     )
     if not is_low_info:
         return False, "最后一条不是低信息回复"
+
+    if is_greeting_only and _is_bumble_light_greeting_followup(messages, last_text=last_text, platform=platform):
+        return False, "Bumble轻招呼入站，允许接住"
 
     if is_emoji_or_symbol_only and _is_warm_positive_emoji_followup(messages, last_text=last_text):
         return False, "正向emoji接住话题，允许继续互动"
@@ -517,7 +548,7 @@ def _is_warm_positive_emoji_followup(messages: list[dict], *, last_text: str = "
     return True
 
 
-def should_reply_to_messages(messages: list[dict]) -> tuple[bool, str]:
+def should_reply_to_messages(messages: list[dict], *, platform: str | None = None) -> tuple[bool, str]:
     """
     双平台统一的业务级回复判断。
 
@@ -534,7 +565,7 @@ def should_reply_to_messages(messages: list[dict]) -> tuple[bool, str]:
     if last_msg.get("sender") == "me" or last_msg.get("is_mine") is True:
         return False, "最后一条为我方发送，跳过（防连发）"
 
-    should_skip, reason = should_skip_low_info_followup(messages)
+    should_skip, reason = should_skip_low_info_followup(messages, platform=platform)
     if should_skip:
         return False, reason
 
@@ -560,7 +591,7 @@ def should_reply_to_messages(messages: list[dict]) -> tuple[bool, str]:
     return True, "允许回复"
 
 
-def classify_partner_followup_quality(messages: list[dict]) -> tuple[str, str]:
+def classify_partner_followup_quality(messages: list[dict], *, platform: str | None = None) -> tuple[str, str]:
     """
     对“我方发出后，对方后续真实回应”做本地质量标签。
 
@@ -577,7 +608,7 @@ def classify_partner_followup_quality(messages: list[dict]) -> tuple[str, str]:
     if last_msg.get("sender") == "me" or last_msg.get("is_mine") is True:
         return "partner_followup_basic", "最后一条不是对方消息"
 
-    should_skip, reason = should_skip_low_info_followup(messages)
+    should_skip, reason = should_skip_low_info_followup(messages, platform=platform)
     if should_skip:
         return "partner_followup_low_info", reason
 

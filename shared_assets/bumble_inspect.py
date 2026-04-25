@@ -384,7 +384,7 @@ def _record_partner_followup_if_needed(match_id: str, match_name: str, messages:
     if current_inbound == recorded_signature:
         return
 
-    event, reason = classify_partner_followup_quality(messages)
+    event, reason = classify_partner_followup_quality(messages, platform="bumble")
     record_runtime_feedback(
         "bumble",
         match_id,
@@ -554,7 +554,7 @@ def _is_new_messages(match_id: str, match_name: str, messages: list) -> bool:
         and latest_text == handled_text
     ):
         if not handled_reason.startswith("skipped:no_safe"):
-            should_send_now, updated_reason = should_reply_to_messages(messages)
+            should_send_now, updated_reason = should_reply_to_messages(messages, platform="bumble")
             if should_send_now:
                 log.info(f"[Bumble] 旧跳过规则已失效，重新放行该入站: {latest_text[:30]}...")
                 return True
@@ -816,7 +816,7 @@ def _run_entries(bot: BumbleBot, page, entries: list[dict]) -> int:
             back_to_list(page, "bumble")
             continue
 
-        should_send, reason = should_reply_to_messages(msgs)
+        should_send, reason = should_reply_to_messages(msgs, platform="bumble")
         if not should_send:
             _update_incremental_baseline(
                 match_id,
