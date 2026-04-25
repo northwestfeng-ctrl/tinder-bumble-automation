@@ -544,10 +544,12 @@ def _start_send_network_probe(page, platform: str) -> dict:
             url = str(response.url or "").lower()
             if not any(regex.search(url) for regex in regexes):
                 return
+            business_failure = _response_business_failure(response)
             probe["matches"].append({
                 "url": response.url,
                 "status": int(response.status),
                 "method": method,
+                "business_failure": business_failure,
             })
         except Exception:
             return
@@ -575,7 +577,59 @@ def _network_probe_failure(probe: Optional[dict]) -> tuple[bool, str]:
         status = int(item.get("status") or 0)
         if status >= 400:
             return True, f"{item.get('method', '')} {status} {item.get('url', '')}"[:160]
+        business_failure = str(item.get("business_failure") or "")
+        if business_failure:
+            return True, f"{item.get('method', '')} business_error {business_failure}"[:160]
     return False, ""
+
+
+def _response_business_failure(response) -> str:
+    """Detect send failures that are returned as HTTP 200 JSON bodies."""
+    try:
+        payload = response.json()
+    except Exception:
+        try:
+            payload = response.text()
+        except Exception:
+            return ""
+
+    marker = _extract_business_failure_marker(payload)
+    return marker[:160] if marker else ""
+
+
+def _extract_business_failure_marker(payload) -> str:
+    if payload in (None, "", [], {}):
+        return ""
+    if isinstance(payload, dict):
+        for key in ("error", "errors", "error_code", "errorCode", "error_message", "errorMessage"):
+            if key in payload and _truthy_error_value(payload.get(key)):
+                return f"{key}={payload.get(key)}"
+        status_value = payload.get("status") or payload.get("result")
+        if isinstance(status_value, str) and re.search(r"(error|fail|denied|blocked|ban|limit)", status_value, re.I):
+            return f"status={status_value}"
+        for value in payload.values():
+            marker = _extract_business_failure_marker(value)
+            if marker:
+                return marker
+        return ""
+    if isinstance(payload, list):
+        for item in payload[:5]:
+            marker = _extract_business_failure_marker(item)
+            if marker:
+                return marker
+        return ""
+    text = str(payload)
+    if re.search(r"(shadow.?ban|rate.?limit|too many|blocked|forbidden|policy|not sent|send failed|发送失败|风控|封禁|限制)", text, re.I):
+        return text[:160]
+    return ""
+
+
+def _truthy_error_value(value) -> bool:
+    if value in (None, False, 0, "", [], {}):
+        return False
+    if isinstance(value, str) and value.strip().lower() in {"0", "false", "none", "null", "ok", "success"}:
+        return False
+    return True
 
 
 def _wait_for_network_probe_failure(page, probe: Optional[dict]) -> tuple[bool, str]:
