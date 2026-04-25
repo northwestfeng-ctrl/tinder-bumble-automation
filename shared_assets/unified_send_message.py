@@ -282,14 +282,17 @@ def send_message_unified(
     for i, line in enumerate(lines):
         for attempt in range(max_retries):
             network_probe = None
+            verify_reason = "not_started"
             # 验证页面仍在聊天页
             if chat_url and not _is_chat_page(page.url, platform):
                 print(f"[Send] ⚠️ 页面偏离，重新进入: {page.url}")
                 page.goto(chat_url, timeout=15000)
                 time.sleep(3)
                 chat_url = page.url
-            
+	            
             try:
+                _clear_interaction_blockers(page, platform)
+
                 # 重新定位输入框（可能因页面刷新而失效）
                 input_box = _locate_input_box(page, platform)
                 if not input_box or not input_box.is_visible(timeout=3000):
@@ -334,7 +337,8 @@ def send_message_unified(
 
                 try:
                     # 发送，并监听可能的底层发信 API 失败响应。
-                    network_probe = _start_send_network_probe(page, platform)
+                    _clear_interaction_blockers(page, platform)
+                    network_probe = _start_send_network_probe(page, platform, sent_text=line)
                     _send_message(page, platform)
                     page.wait_for_timeout(600)
 
@@ -531,10 +535,16 @@ def _is_chat_page(url: str, platform: str) -> bool:
     return adapter.is_chat_page_fn(url)
 
 
-def _start_send_network_probe(page, platform: str) -> dict:
+def _start_send_network_probe(page, platform: str, sent_text: str = "") -> dict:
     """Capture likely send API responses; endpoint patterns can be tuned via env."""
     regexes = SEND_ENDPOINT_REGEXES.get(str(platform or "").lower(), ())
-    probe = {"matches": [], "regexes": regexes, "handler": None, "removed": False}
+    probe = {
+        "matches": [],
+        "regexes": regexes,
+        "handler": None,
+        "removed": False,
+        "sent_text": _normalize_text(sent_text),
+    }
 
     def _handler(response):
         try:
@@ -544,7 +554,7 @@ def _start_send_network_probe(page, platform: str) -> dict:
             url = str(response.url or "").lower()
             if not any(regex.search(url) for regex in regexes):
                 return
-            business_failure = _response_business_failure(response)
+            business_failure = _response_business_failure(response, probe.get("sent_text", ""))
             probe["matches"].append({
                 "url": response.url,
                 "status": int(response.status),
@@ -583,7 +593,7 @@ def _network_probe_failure(probe: Optional[dict]) -> tuple[bool, str]:
     return False, ""
 
 
-def _response_business_failure(response) -> str:
+def _response_business_failure(response, sent_text: str = "") -> str:
     """Detect send failures that are returned as HTTP 200 JSON bodies."""
     try:
         payload = response.json()
@@ -593,34 +603,39 @@ def _response_business_failure(response) -> str:
         except Exception:
             return ""
 
-    marker = _extract_business_failure_marker(payload)
+    marker = _extract_business_failure_marker(payload, sent_text=sent_text)
     return marker[:160] if marker else ""
 
 
-def _extract_business_failure_marker(payload, source_key: str = "") -> str:
+def _extract_business_failure_marker(payload, source_key: str = "", sent_text: str = "") -> str:
     if payload in (None, "", [], {}):
         return ""
     source = str(source_key or "").strip()
+    sent = _normalize_text(sent_text)
     if isinstance(payload, dict):
+        for key in ("success", "ok"):
+            if key in payload and payload.get(key) is False:
+                return f"{key}=False"
         for key in ("error", "errors", "error_code", "errorCode", "error_message", "errorMessage"):
             if key in payload and _truthy_error_value(payload.get(key)):
                 return f"{key}={payload.get(key)}"
         status_value = payload.get("status") or payload.get("result")
+        if isinstance(status_value, (int, float)) and int(status_value) >= 400:
+            return f"status={status_value}"
         if isinstance(status_value, str) and re.search(r"(error|fail|denied|blocked|ban|limit)", status_value, re.I):
             return f"status={status_value}"
-        echo_keys = {"message", "messages", "text", "content", "body", "reply", "data_text", "caption"}
         for key, value in payload.items():
-            if str(key).strip() in echo_keys:
-                continue
-            marker = _extract_business_failure_marker(value, str(key))
+            marker = _extract_business_failure_marker(value, str(key), sent)
             if marker:
                 return marker
         return ""
     if isinstance(payload, list):
         for item in payload[:5]:
-            marker = _extract_business_failure_marker(item, source)
+            marker = _extract_business_failure_marker(item, source, sent)
             if marker:
                 return marker
+        return ""
+    if sent and _normalize_text(str(payload)) == sent:
         return ""
     error_like_source = re.search(r"(error|status|result|reason|code|failure|fail)", source, re.I)
     if not error_like_source:
@@ -629,6 +644,43 @@ def _extract_business_failure_marker(payload, source_key: str = "") -> str:
     if re.search(r"(shadow.?ban|rate.?limit|too many|blocked|forbidden|policy|not sent|send failed|发送失败|风控|封禁|限制)", text, re.I):
         return text[:160]
     return ""
+
+
+def _clear_interaction_blockers(page, platform: str) -> None:
+    """Best-effort cleanup for modal overlays and full-page loading masks before actions."""
+    if str(platform or "").lower() != "tinder":
+        return
+    try:
+        page.evaluate(r"""
+            () => {
+                const closeTextRe = /^(no thanks|maybe later|not now|skip|取消|稍后|以后再说|不用|关闭)$/i;
+                const candidates = Array.from(document.querySelectorAll(
+                    'button, [role="button"], [aria-label], [title], [data-testid], [class*="close"], [class*="dismiss"]'
+                ));
+                for (const node of candidates.slice(0, 80)) {
+                    const text = [
+                        node.innerText || '',
+                        node.getAttribute && node.getAttribute('aria-label') || '',
+                        node.getAttribute && node.getAttribute('title') || '',
+                        node.getAttribute && node.getAttribute('data-testid') || '',
+                    ].join(' ').replace(/\s+/g, ' ').trim();
+                    if (!text) continue;
+                    if (closeTextRe.test(text) || /close|dismiss|modal-close|no_thanks|maybe_later/i.test(text)) {
+                        try { node.click(); return true; } catch (e) {}
+                    }
+                }
+                return false;
+            }
+        """)
+    except Exception:
+        pass
+    try:
+        page.locator(
+            '[aria-label*="Loading"], [aria-label*="loading"], [role="progressbar"], '
+            '[class*="loading"], [class*="spinner"], [class*="loader"]'
+        ).first.wait_for(state="hidden", timeout=2500)
+    except Exception:
+        pass
 
 
 def _truthy_error_value(value) -> bool:

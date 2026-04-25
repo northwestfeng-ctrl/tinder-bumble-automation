@@ -295,9 +295,12 @@ class BumbleBot:
                         };
                         const textHash = (node) => {
                             const raw = ((node && node.textContent) || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+                            const siblings = node && node.parentNode ? Array.from(node.parentNode.children || []) : [];
+                            const siblingIndex = siblings.indexOf(node);
                             let hash = 0;
-                            for (let i = 0; i < raw.length; i++) {
-                                hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+                            const input = `${raw}#${siblingIndex}`;
+                            for (let i = 0; i < input.length; i++) {
+                                hash = ((hash << 5) - hash + input.charCodeAt(i)) | 0;
                             }
                             return Math.abs(hash).toString(36) || 'empty';
                         };
@@ -492,9 +495,12 @@ class BumbleBot:
                 };
                 const textHash = (node) => {
                     const raw = ((node && node.textContent) || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+                    const siblings = node && node.parentNode ? Array.from(node.parentNode.children || []) : [];
+                    const siblingIndex = siblings.indexOf(node);
                     let hash = 0;
-                    for (let i = 0; i < raw.length; i++) {
-                        hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+                    const input = `${raw}#${siblingIndex}`;
+                    for (let i = 0; i < input.length; i++) {
+                        hash = ((hash << 5) - hash + input.charCodeAt(i)) | 0;
                     }
                     return Math.abs(hash).toString(36) || 'empty';
                 };
