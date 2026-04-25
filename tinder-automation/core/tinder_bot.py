@@ -1849,12 +1849,11 @@ class TinderBot:
         """
         new_matches_sent = 0
         if self.config.get("browser_headless", False):
-            self._log("info", "[Tinder] 无头模式下跳过新配对页预扫，优先保证消息回复主链路")
-        else:
-            if self._has_new_matches_modal():
-                new_matches_sent = self.check_new_matches()
-                if new_matches_sent > 0:
-                    self._log("info", f"[Tinder] 新配对发送完毕: {new_matches_sent} 条")
+            self._log("info", "[Tinder] 无头模式下执行轻量新配对预扫")
+        if self._has_new_matches_modal():
+            new_matches_sent = self.check_new_matches()
+            if new_matches_sent > 0:
+                self._log("info", f"[Tinder] 新配对发送完毕: {new_matches_sent} 条")
 
         self.navigate_to_messages()
         time.sleep(5)
