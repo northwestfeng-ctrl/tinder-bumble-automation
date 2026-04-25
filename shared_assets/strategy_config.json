@@ -3,9 +3,9 @@
   "generated_at": "2026-04-24 07:36:29",
   "source": "LLM演化流水线 2026-04-24 07:36:29 | source=unified_corpus_snapshot.md | id=12051245-7b42-4eb5-8b8b-c3f7db74a5e0",
   "default_openers": {
-    "default": "先打个招呼 你这张有点会拍",
-    "tinder": "先打个招呼 你这张有点会拍",
-    "bumble": "先打个招呼 你这个资料有点意思"
+    "default": "先打个招呼 周末一般怎么安排",
+    "tinder": "先打个招呼 你周末一般怎么安排",
+    "bumble": "Hi 刚忙完 你周末一般怎么安排"
   },
   "contextual_fallbacks": [
     {

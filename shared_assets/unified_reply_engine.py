@@ -94,6 +94,9 @@ AFFIRMATIVE_REPLY_TEXTS = {"好", "好的", "好啊", "好滴", "行", "行啊",
 GREETING_REPLY_TEXTS = {"hi", "hello", "hey", "heyy", "heyy", "嗨", "哈喽", "嗨👋", "hello👋", "hey👋"}
 CONTACT_CONFIRM_REPLY_TEXTS = {"加了", "已加", "通过了", "加你了", "加啦"}
 POSITIVE_EMOJI_REPLY_TEXTS = {"😂", "🤣", "😆", "😁", "😄", "😅", "😊", "😉", "🤭", "🙈", "🥹"}
+CLOSED_LOOP_CHINESE_REPLY_TEXTS = {
+    "是吗", "对啊", "对呀", "对的", "好吧", "这样啊", "真的假的", "嗯呢", "哦哦",
+}
 CONTACT_REQUEST_PATTERN = re.compile(
     r'(?:(?:你有|有)(?:微信|wechat|vx)|怎么联系|'
     r'(?:加个?|留个?|换个?|给我|发我).{0,6}(?:微信|wechat|vx|联系方式)|'
@@ -351,10 +354,10 @@ def build_contextual_fallback_reply(
 
     if any(token in normalized for token in ("hi", "hello", "hey")) or any(token in last_text for token in ("嗨", "哈喽")):
         if platform_key == "bumble" and any(token in bio_text for token in ("牛肉丸", "肉丸")):
-            return _clip_reply("your name just made me hungry" if english else "你这个名字有点太下饭了", max_len)
+            return _clip_reply("your name just made me hungry, what's the story" if english else "你这个名字有点太下饭了 怎么来的", max_len)
         if platform_key == "bumble":
-            return _clip_reply("hey, good timing" if english else "来得刚好 我接住了", max_len)
-        return _clip_reply("Right on time" if english else "来得刚好 我接住了", max_len)
+            return _clip_reply("Hey, how's your weekend going" if english else "来得刚好 周末一般怎么安排", max_len)
+        return _clip_reply("Hey, how's your week going" if english else "来得刚好 周末一般怎么安排", max_len)
 
     # Do not send generic filler like "你这句有点意思" after LLM/repair failure.
     # Existing chats should either hit a strong context fallback above or skip.
@@ -417,6 +420,7 @@ def is_fallback_reply(text: str) -> bool:
         "你这句有点意思",
         "这个想法有意思",
         "这句我先收下",
+        "来得刚好 我接住了",
     }
 
 
@@ -1141,8 +1145,10 @@ def build_static_system_prompt(
         "- 回复长度必须 ≤ 50 个字符\n"
         "- 仅允许口语化短句，语言必须跟随对方最近一条消息\n"
         "- 对方说英文就必须回英文\n"
-        "- 若无法安全完成，也只能输出：{\"reply\":\"这会儿有点忙，晚点聊\"}\n"
-        "格式示例：{\"reply\":\"这个想法有意思\"}"
+        "- 禁止只用“是吗/对啊/好吧/这样啊”等纯疑问或敷衍词作答，必须包含信息增量或轻量引导\n"
+        "- 若无法安全完成，输出：{\"reply\":\"\"}，系统会跳过发送\n"
+        "- 禁止输出忙线、晚点聊、稍后聊等拒绝型占位话术\n"
+        "格式示例：{\"reply\":\"你这个说法有点大胆\"}"
     )
 
     return "\n\n".join(sections)
@@ -1500,7 +1506,7 @@ def _repair_reply_output(
         "【格式修复】\n"
         "你上一次输出了分析或格式错误文本。\n"
         f"现在只能返回一个 JSON 对象：{{\"reply\":\"最终回复\"}}，且 reply 不超过 {max_len} 个字符。\n"
-        f"如果无法从错误输出中恢复有效回复，就返回 {{\"reply\":\"{SAFE_FALLBACK_REPLY}\"}}。"
+        "如果无法从错误输出中恢复有效回复，就返回 {\"reply\":\"\"}。"
     )
     repair_user_prompt = (
         f"{dynamic_user_prompt}\n\n"
@@ -1873,6 +1879,9 @@ def _chinese_reply_quality_score(text: str, messages: Optional[list[dict]] = Non
     if not compact:
         return -5, ["no-cjk"]
 
+    if compact in CLOSED_LOOP_CHINESE_REPLY_TEXTS:
+        return -5, ["closed-loop-filler"]
+
     score = 0
     cjk_len = len(compact)
     has_question = bool(re.search(r"[？?]", candidate)) or bool(
@@ -1976,6 +1985,22 @@ def _looks_like_ai_refusal_reply(text: str) -> bool:
     return bool(refusal_re.search(candidate))
 
 
+def _looks_like_delay_placeholder_reply(text: str) -> bool:
+    """拒绝型/延后型占位句会直接截断对话，任何路径都不应发送。"""
+    candidate = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not candidate:
+        return False
+    normalized = candidate.lower().replace("，", ",")
+    if len(candidate) > 40:
+        return False
+    return bool(re.search(
+        r"(晚点聊|晚点再聊|稍后聊|回头聊|改天聊|先忙|先去忙|有点忙|"
+        r"talk later|chat later|busy right now|a bit busy)",
+        normalized,
+        re.IGNORECASE,
+    ))
+
+
 def _violates_recent_partner_language(text: str, messages: Optional[list[dict]] = None) -> bool:
     """Hard-stop obvious language drift after a recent CJK partner message."""
     candidate = re.sub(r"\s+", " ", (text or "")).strip()
@@ -2008,6 +2033,10 @@ def _safety_filter_reply(text: str, max_len: int, messages: Optional[list[dict]]
         log.warning(f"[URE] ⚠️ 检测到 AI 拒答/身份泄露话术，拒绝发送: {clean[:80]}")
         return SAFE_FALLBACK_REPLY
 
+    if _looks_like_delay_placeholder_reply(clean):
+        log.warning(f"[URE] ⚠️ 检测到拒绝/延后型占位话术，拒绝发送: {clean[:80]}")
+        return SAFE_FALLBACK_REPLY
+
     if _violates_recent_partner_language(clean, messages):
         log.warning(f"[URE] ⚠️ 检测到回复语言漂移，拒绝发送: {clean[:80]}")
         return SAFE_FALLBACK_REPLY
@@ -2028,7 +2057,11 @@ def _safety_filter_reply(text: str, max_len: int, messages: Optional[list[dict]]
 
 def sanitize_reply_for_send(text: str, max_len: int = 50, messages: Optional[list[dict]] = None) -> str:
     """供各发送路径复用的统一最终安全过滤。"""
-    return _safety_filter_reply(text, max_len, messages)
+    clean = _safety_filter_reply(text, max_len, messages)
+    if clean == SAFE_FALLBACK_REPLY:
+        log.warning("[URE] 出站安全过滤拒绝发送，不再替换为忙线兜底")
+        return ""
+    return clean
 
 
 # ─────────────────────────────────────────────────────────────────
