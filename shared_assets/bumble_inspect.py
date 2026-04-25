@@ -9,7 +9,7 @@ bumble_inspect.py — 由 unified_orchestrator 调用，subprocess 隔离规避 
   只基于 "Your Move / 轮到您了" 候选顺序遍历，
   不套用 Tinder 的 13 + 5 滚动窗口。
 """
-import sys, time, random, json, logging, importlib.util, types
+import sys, os, time, random, json, logging, importlib.util, types
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -63,6 +63,17 @@ def _load_bumble_bot_class():
 
 BumbleBot = _load_bumble_bot_class()
 
+
+def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int | None = None) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except Exception:
+        value = default
+    value = max(min_value, value)
+    if max_value is not None:
+        value = min(max_value, value)
+    return value
+
 BUMBLE_PROFILE   = str(Path.home() / ".bumble-automation" / "test-profile")
 CORPUS_FILE      = BUMBLE_DIR / "pending_corpus.jsonl"
 BASELINE_FILE    = BUMBLE_DIR / "history_baseline.json"
@@ -70,6 +81,9 @@ RUNTIME_STATE_FILE = BUMBLE_DIR / "bumble_runtime_state.json"
 DORMANT_REACTIVATION_MAX_ATTEMPTS_PER_ROUND = 3
 DORMANT_REACTIVATION_MAX_SECONDS_PER_ROUND = 15
 SKIPPED_INBOUND_RETRY_COOLDOWN_HOURS = 24
+NO_SAFE_RETRY_BASE_SECONDS = _env_int("BUMBLE_NO_SAFE_RETRY_BASE_SECONDS", 300)
+NO_SAFE_RETRY_MAX_SECONDS = _env_int("BUMBLE_NO_SAFE_RETRY_MAX_SECONDS", 1800)
+NO_SAFE_RETRY_MAX_ATTEMPTS = _env_int("BUMBLE_NO_SAFE_RETRY_MAX_ATTEMPTS", 3)
 CORPUS_STORE = ConversationStore()
 
 
@@ -562,14 +576,27 @@ def _is_new_messages(match_id: str, match_name: str, messages: list) -> bool:
         if handled_at is None:
             log.info(f"[Bumble] 同一条跳过入站缺少时间戳，按已处理跳过重试: {latest_text[:30]}...")
             return False
+        if handled_reason.startswith("skipped:no_safe"):
+            retry_count = int((prev_entry or {}).get("no_safe_retry_count", 1) or 1)
+            if retry_count >= NO_SAFE_RETRY_MAX_ATTEMPTS:
+                log.info(f"[Bumble] 无安全回复已达到最大重试次数 {retry_count}，等待人工介入: {latest_text[:30]}...")
+                return False
+            cooldown_seconds = min(
+                NO_SAFE_RETRY_MAX_SECONDS,
+                NO_SAFE_RETRY_BASE_SECONDS * (2 ** max(retry_count - 1, 0)),
+            )
+            elapsed_seconds = (datetime.now() - handled_at).total_seconds()
+            if elapsed_seconds < cooldown_seconds:
+                remaining_minutes = max(int((cooldown_seconds - elapsed_seconds) // 60), 0)
+                log.info(f"[Bumble] 同一条 no_safe 入站仍在退避冷却中（第 {retry_count} 次），约剩 {remaining_minutes}m，跳过重试: {latest_text[:30]}...")
+                return False
+            log.info(f"[Bumble] 无安全回复退避冷却已结束，重新放行该入站: {latest_text[:30]}...")
+            return True
         if (datetime.now() - handled_at) < timedelta(hours=SKIPPED_INBOUND_RETRY_COOLDOWN_HOURS):
             remaining = timedelta(hours=SKIPPED_INBOUND_RETRY_COOLDOWN_HOURS) - (datetime.now() - handled_at)
             remaining_hours = max(int(remaining.total_seconds() // 3600), 0)
             log.info(f"[Bumble] 同一条跳过入站仍在冷却中（{handled_reason}），约剩 {remaining_hours}h，跳过重试: {latest_text[:30]}...")
             return False
-        if handled_reason.startswith("skipped:no_safe"):
-            log.info(f"[Bumble] 无安全回复冷却已结束，重新放行该入站: {latest_text[:30]}...")
-            return True
 
     if len(current_inbound) > len(recorded_inbound):
         _record_partner_followup_if_needed(match_id, match_name, messages, prev_entry)
@@ -843,12 +870,24 @@ def _run_entries(bot: BumbleBot, page, entries: list[dict]) -> int:
 
         reply, used_cache = _generate_or_fetch_reply(match_id, msgs, bio, match_name=match_name)
         if not reply:
+            _, keyed = _load_incremental_baseline()
+            prev_entry = keyed.get(_conversation_key(match_id, match_name)) or {}
+            no_safe_retry_count = int(prev_entry.get("no_safe_retry_count", 0) or 0) + 1
+            no_safe_reason = (
+                "failed:manual_intervention"
+                if no_safe_retry_count >= NO_SAFE_RETRY_MAX_ATTEMPTS
+                else "skipped:no_safe_reply"
+            )
             _update_incremental_baseline(
                 match_id,
                 match_name,
                 msgs,
                 handled_inbound_signature=_inbound_signature(msgs),
-                handled_inbound_reason="skipped:no_safe_reply",
+                handled_inbound_reason=no_safe_reason,
+                metadata={
+                    "no_safe_retry_count": no_safe_retry_count,
+                    "no_safe_last_retry_at": datetime.now().isoformat(),
+                },
             )
             record_runtime_feedback(
                 "bumble",
@@ -859,7 +898,10 @@ def _run_entries(bot: BumbleBot, page, entries: list[dict]) -> int:
                 reason="no_safe_reply",
                 messages=msgs,
             )
-            log.info(f"[Bumble] #{index + 1} 无安全回复，跳过 {match_name}")
+            if no_safe_reason.startswith("failed:"):
+                log.warning(f"[Bumble] #{index + 1} 无安全回复已达 {no_safe_retry_count} 次，转人工介入 {match_name}")
+            else:
+                log.info(f"[Bumble] #{index + 1} 无安全回复，第 {no_safe_retry_count} 次退避后重试 {match_name}")
             back_to_list(page, "bumble")
             continue
 

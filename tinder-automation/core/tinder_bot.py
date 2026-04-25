@@ -167,6 +167,9 @@ def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int | No
 
 
 SKIPPED_INBOUND_RETRY_COOLDOWN_HOURS = _env_int("TINDER_SKIPPED_INBOUND_RETRY_COOLDOWN_HOURS", 24)
+NO_SAFE_RETRY_BASE_SECONDS = _env_int("TINDER_NO_SAFE_RETRY_BASE_SECONDS", 300)
+NO_SAFE_RETRY_MAX_SECONDS = _env_int("TINDER_NO_SAFE_RETRY_MAX_SECONDS", 1800)
+NO_SAFE_RETRY_MAX_ATTEMPTS = _env_int("TINDER_NO_SAFE_RETRY_MAX_ATTEMPTS", 3)
 DORMANT_REACTIVATION_MIN_DORMANT_HOURS = _env_int(
     "TINDER_DORMANT_REACTIVATION_MIN_DORMANT_HOURS",
     _env_int("APP_REACTIVATION__MIN_DORMANT_HOURS", 24),
@@ -2045,12 +2048,26 @@ class TinderBot:
                         scan_limit = new_scan_limit
                     reply, used_cache = self._generate_or_fetch_reply(match_id, effective_messages, bio, age)
                     if not reply:
+                        _, keyed = self._load_incremental_baseline()
+                        prev_entry = keyed.get(
+                            self._conversation_key(match_id, match_name or "Unknown", 0)
+                        ) or keyed.get(self._conversation_key(match_id, "", 0)) or {}
+                        no_safe_retry_count = int(prev_entry.get("no_safe_retry_count", 0) or 0) + 1
+                        no_safe_reason = (
+                            "failed:manual_intervention"
+                            if no_safe_retry_count >= NO_SAFE_RETRY_MAX_ATTEMPTS
+                            else "skipped:no_safe_reply"
+                        )
                         self._update_incremental_baseline(
                             match_id,
                             match_name or "Unknown",
                             effective_messages,
                             handled_inbound_signature=self._inbound_signature(effective_messages),
-                            handled_inbound_reason="skipped:no_safe_reply",
+                            handled_inbound_reason=no_safe_reason,
+                            metadata={
+                                "no_safe_retry_count": no_safe_retry_count,
+                                "no_safe_last_retry_at": datetime.now().isoformat(),
+                            },
                         )
                         record_runtime_feedback(
                             "tinder",
@@ -2061,7 +2078,10 @@ class TinderBot:
                             reason="no_safe_reply",
                             messages=effective_messages,
                         )
-                        self._log("info", f"#{index + 1} 无安全回复，跳过发送")
+                        if no_safe_reason.startswith("failed:"):
+                            self._log("warning", f"#{index + 1} 无安全回复已达 {no_safe_retry_count} 次，转人工介入")
+                        else:
+                            self._log("info", f"#{index + 1} 无安全回复，第 {no_safe_retry_count} 次退避后重试")
                         continue
                     self._log(
                         "info",
@@ -2665,6 +2685,31 @@ class TinderBot:
                         f"同一条跳过入站缺少时间戳，按已处理跳过重试: {latest_text[:30]}...",
                     )
                     return False
+                if handled_reason.startswith("skipped:no_safe"):
+                    retry_count = int((prev_entry or {}).get("no_safe_retry_count", 1) or 1)
+                    if retry_count >= NO_SAFE_RETRY_MAX_ATTEMPTS:
+                        self._log(
+                            "info",
+                            f"无安全回复已达到最大重试次数 {retry_count}，等待人工介入: {latest_text[:30]}...",
+                        )
+                        return False
+                    cooldown_seconds = min(
+                        NO_SAFE_RETRY_MAX_SECONDS,
+                        NO_SAFE_RETRY_BASE_SECONDS * (2 ** max(retry_count - 1, 0)),
+                    )
+                    elapsed_seconds = (datetime.now() - handled_at).total_seconds()
+                    if elapsed_seconds < cooldown_seconds:
+                        remaining_minutes = max(int((cooldown_seconds - elapsed_seconds) // 60), 0)
+                        self._log(
+                            "info",
+                            f"同一条 no_safe 入站仍在退避冷却中（第 {retry_count} 次），约剩 {remaining_minutes}m，跳过重试: {latest_text[:30]}...",
+                        )
+                        return False
+                    self._log(
+                        "info",
+                        f"无安全回复退避冷却已结束，重新放行该入站: {latest_text[:30]}...",
+                    )
+                    return True
                 if (datetime.now() - handled_at) < timedelta(hours=SKIPPED_INBOUND_RETRY_COOLDOWN_HOURS):
                     remaining = timedelta(hours=SKIPPED_INBOUND_RETRY_COOLDOWN_HOURS) - (datetime.now() - handled_at)
                     remaining_hours = max(int(remaining.total_seconds() // 3600), 0)
@@ -2673,12 +2718,6 @@ class TinderBot:
                         f"同一条跳过入站仍在冷却中（{handled_reason}），约剩 {remaining_hours}h，跳过重试: {latest_text[:30]}...",
                     )
                     return False
-                if handled_reason.startswith("skipped:no_safe"):
-                    self._log(
-                        "info",
-                        f"无安全回复冷却已结束，重新放行该入站: {latest_text[:30]}...",
-                    )
-                    return True
 
             if len(current_inbound) > len(recorded_inbound):
                 self._record_partner_followup_if_needed(

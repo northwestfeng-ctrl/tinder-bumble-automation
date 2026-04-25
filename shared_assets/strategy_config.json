@@ -2,6 +2,19 @@
   "version": "3.2",
   "generated_at": "2026-04-24 07:36:29",
   "source": "LLM演化流水线 2026-04-24 07:36:29 | source=unified_corpus_snapshot.md | id=12051245-7b42-4eb5-8b8b-c3f7db74a5e0",
+  "default_openers": {
+    "default": "先打个招呼 你这张有点会拍",
+    "tinder": "先打个招呼 你这张有点会拍",
+    "bumble": "先打个招呼 你这个资料有点意思"
+  },
+  "contextual_fallbacks": [
+    {
+      "platform": "all",
+      "scope": "latest",
+      "trigger_regex": "^(?:那)?(?:纽约|福州|马尾|上海|北京)(?:也算|也是)$",
+      "reply": "这个归属申请有点大胆"
+    }
+  ],
   "success_patterns": [
     {
       "pattern": "你禁欲吗",

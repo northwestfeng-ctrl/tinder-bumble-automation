@@ -174,6 +174,60 @@ def _clip_reply(text: str, max_len: int = 50) -> str:
     return candidate
 
 
+def _configured_default_opener(strategy: Optional[dict], platform: str, max_len: int = 50) -> str:
+    """Return a hard safe opener for new matches when LLM/profile context is unavailable."""
+    strategy = strategy or {}
+    platform_key = str(platform or "tinder").lower()
+    candidates = strategy.get("default_openers") or strategy.get("fallback_openers") or {}
+    value = ""
+    if isinstance(candidates, dict):
+        value = str(candidates.get(platform_key) or candidates.get("default") or "").strip()
+    elif isinstance(candidates, str):
+        value = candidates.strip()
+    if not value:
+        value = "先打个招呼 你这张有点会拍"
+    return _clip_reply(value, max_len)
+
+
+def _configured_contextual_fallback(
+    last_text: str,
+    recent_partner_text: str,
+    *,
+    platform: str = "tinder",
+    max_len: int = 50,
+) -> Optional[str]:
+    """Strategy-configurable high-confidence fallback rules for known compact contexts."""
+    try:
+        strategy = load_strategy()
+    except Exception:
+        strategy = {}
+    rules = strategy.get("contextual_fallbacks") or []
+    if not isinstance(rules, list):
+        return None
+
+    context = re.sub(r"\s+", " ", recent_partner_text or "").strip()
+    latest = re.sub(r"\s+", " ", last_text or "").strip()
+    platform_key = str(platform or "").lower()
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        rule_platform = str(rule.get("platform", "") or "").lower()
+        if rule_platform and rule_platform not in {platform_key, "all", "*"}:
+            continue
+        reply = str(rule.get("reply", "") or "").strip()
+        if not reply:
+            continue
+        target = latest if str(rule.get("scope", "latest")).lower() == "latest" else f"{context} {latest}".strip()
+        pattern = str(rule.get("trigger_regex", "") or "").strip()
+        try:
+            if pattern and re.search(pattern, target, re.IGNORECASE):
+                return _clip_reply(reply, max_len)
+        except re.error as exc:
+            log.warning(f"[URE] contextual_fallbacks 正则无效: {pattern} ({exc})")
+            continue
+    return None
+
+
 def _has_continue_signal(text: str) -> bool:
     return bool(CONTINUE_SIGNAL_PATTERN.search(re.sub(r"\s+", " ", (text or "")).strip()))
 
@@ -280,13 +334,14 @@ def build_contextual_fallback_reply(
     if _contains_cjk_text(last_text) and "不证明" in last_text:
         return _clip_reply("行 那就慢慢看", max_len)
 
-    compact_last = re.sub(r"\s+", "", last_text)
-    if _contains_cjk_text(recent_partner_text) and len(compact_last) <= 10:
-        if (
-            any(token in compact_last for token in ("纽约", "福州", "马尾", "上海", "北京"))
-            and (compact_last.endswith("也是") or "也算" in compact_last)
-        ):
-            return _clip_reply("这个归属申请有点大胆", max_len)
+    configured = _configured_contextual_fallback(
+        last_text,
+        recent_partner_text,
+        platform=platform_key,
+        max_len=max_len,
+    )
+    if configured:
+        return configured
 
     if (
         any(token in last_text for token in ("哪", "谁", "猜", "选哪个", "哪张"))
@@ -360,6 +415,8 @@ def is_fallback_reply(text: str) -> bool:
         "right on time",
         "hey, good timing",
         "你这句有点意思",
+        "这个想法有意思",
+        "这句我先收下",
     }
 
 
@@ -2002,11 +2059,11 @@ def generate_reply(
     ----
     str | None : 清洗后的回复文本，失败返回 None
     """
-    if not messages and not (bio or "").strip():
-        return None
-
     if strategy is None:
         strategy = load_strategy()
+
+    if not messages and not (bio or "").strip():
+        return _configured_default_opener(strategy, platform, max_len)
 
     reaction_reply = build_reaction_ack_reply(messages, max_len=max_len)
     if reaction_reply:
