@@ -1832,6 +1832,19 @@ def _looks_like_weak_chinese_reply(text: str, messages: Optional[list[dict]] = N
     return False
 
 
+def _looks_like_ai_refusal_reply(text: str) -> bool:
+    candidate = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not candidate:
+        return False
+    refusal_re = re.compile(
+        r"(?:as an ai|ai language model|i'?m an ai|i cannot fulfill|i can'?t assist|"
+        r"作为(?:一个)?(?:ai|人工智能|语言模型)|我是(?:一个)?(?:ai|人工智能|语言模型)|"
+        r"无法(?:提供|满足|协助|完成)|不能(?:提供|协助|完成)|不适合提供)",
+        re.IGNORECASE,
+    )
+    return bool(refusal_re.search(candidate))
+
+
 def _violates_recent_partner_language(text: str, messages: Optional[list[dict]] = None) -> bool:
     """Hard-stop obvious language drift after a recent CJK partner message."""
     candidate = re.sub(r"\s+", " ", (text or "")).strip()
@@ -1858,6 +1871,10 @@ def _safety_filter_reply(text: str, max_len: int, messages: Optional[list[dict]]
 
     if _looks_like_analysis(clean):
         log.warning(f"[URE] ⚠️ 检测到思维链/分析文本，改用安全兜底: {clean[:80]}")
+        return SAFE_FALLBACK_REPLY
+
+    if _looks_like_ai_refusal_reply(clean):
+        log.warning(f"[URE] ⚠️ 检测到 AI 拒答/身份泄露话术，拒绝发送: {clean[:80]}")
         return SAFE_FALLBACK_REPLY
 
     if _violates_recent_partner_language(clean, messages):

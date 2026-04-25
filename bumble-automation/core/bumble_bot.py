@@ -286,13 +286,10 @@ class BumbleBot:
                                 if (value) return `${sender}::attr::${name}:${value}`;
                             }
                         }
-                        const parts = [];
-                        current = bubble;
-                        for (let depth = 0; depth < 8 && current && current.parentElement; depth++, current = current.parentElement) {
-                            const siblings = Array.from(current.parentElement.children || []);
-                            parts.push(`${current.tagName || 'node'}:${siblings.indexOf(current)}`);
+                        if (text === '[liked your message]') {
+                            return `${sender}::reaction_like::canonical`;
                         }
-                        return `${sender}::path::${parts.reverse().join('/') || index}::${text}`;
+                        return `${sender}::text::${text}`;
                     };
                     bubbles.forEach((bubble, index) => {
                         const text = extractBubbleText(bubble);
@@ -457,13 +454,10 @@ class BumbleBot:
                         if (value) return `${sender}::attr::${name}:${value}`;
                     }
                 }
-                const parts = [];
-                current = bubble;
-                for (let depth = 0; depth < 8 && current && current.parentElement; depth++, current = current.parentElement) {
-                    const siblings = Array.from(current.parentElement.children || []);
-                    parts.push(`${current.tagName || 'node'}:${siblings.indexOf(current)}`);
+                if (text === '[liked your message]') {
+                    return `${sender}::reaction_like::canonical`;
                 }
-                return `${sender}::path::${parts.reverse().join('/') || index}::${text}`;
+                return `${sender}::text::${text}`;
             };
 
             bubbles.forEach((b, index) => {

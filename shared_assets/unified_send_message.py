@@ -53,7 +53,21 @@ def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int | No
 
 
 DEFAULT_SEND_MAX_RETRIES = _env_int("APP_SEND__MAX_RETRIES", 3, min_value=1, max_value=10)
-SEND_FAILURE_SETTLE_MS = _env_int("APP_SEND__FAILURE_SETTLE_MS", 1600, min_value=300, max_value=5000)
+SEND_FAILURE_SETTLE_MS = _env_int("APP_SEND__FAILURE_SETTLE_MS", 9000, min_value=1000, max_value=30000)
+SEND_NETWORK_ACK_MS = _env_int("APP_SEND__NETWORK_ACK_MS", 10000, min_value=1000, max_value=30000)
+
+
+def _env_patterns(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.getenv(name, "")
+    if not raw.strip():
+        return default
+    return tuple(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
+SEND_ENDPOINT_PATTERNS = {
+    "tinder": _env_patterns("APP_SEND__TINDER_ENDPOINT_PATTERNS", ("message", "messages", "send")),
+    "bumble": _env_patterns("APP_SEND__BUMBLE_ENDPOINT_PATTERNS", ("message", "messages", "chat", "send")),
+}
 
 
 @dataclass(frozen=True)
@@ -242,6 +256,7 @@ def send_message_unified(
     
     for i, line in enumerate(lines):
         for attempt in range(max_retries):
+            network_probe = None
             # 验证页面仍在聊天页
             if chat_url and not _is_chat_page(page.url, platform):
                 print(f"[Send] ⚠️ 页面偏离，重新进入: {page.url}")
@@ -292,13 +307,22 @@ def send_message_unified(
                     )
                     continue
 
-                # 发送
+                # 发送，并监听可能的底层发信 API 失败响应。
+                network_probe = _start_send_network_probe(page, platform)
                 _send_message(page, platform)
                 page.wait_for_timeout(600)
 
                 # 验证发送成功
-                verified, verify_reason = _verify_sent(page, input_box, line, platform, before_state)
+                verified, verify_reason = _verify_sent(
+                    page,
+                    input_box,
+                    line,
+                    platform,
+                    before_state,
+                    network_probe,
+                )
                 if verified:
+                    _stop_send_network_probe(page, network_probe)
                     print(f"[Send] 第 {i+1}/{len(lines)} 条发送成功: {line[:30]}...")
                     _set_send_diagnostics(
                         page,
@@ -312,8 +336,15 @@ def send_message_unified(
                     break
 
                 page.wait_for_timeout(800)
-                late_verified, late_reason = _verify_sent_late(page, line, platform, before_state)
+                late_verified, late_reason = _verify_sent_late(
+                    page,
+                    line,
+                    platform,
+                    before_state,
+                    network_probe,
+                )
                 if late_verified:
+                    _stop_send_network_probe(page, network_probe)
                     print(f"[Send] ℹ️ 第 {i+1}/{len(lines)} 条发送晚确认成功: {line[:30]}...")
                     _set_send_diagnostics(
                         page,
@@ -325,6 +356,8 @@ def send_message_unified(
                         line_count=len(lines),
                     )
                     break
+
+                _stop_send_network_probe(page, network_probe)
 
                 print(f"[Send] ⚠️ 第 {i+1} 条发送未确认({verify_reason})，重试第 {attempt+2} 次")
                 _set_send_diagnostics(
@@ -339,6 +372,7 @@ def send_message_unified(
                 )
 
             except Exception as e:
+                _stop_send_network_probe(page, network_probe)
                 print(f"[Send] ⚠️ 第 {i+1} 条异常: {e}, 重试第 {attempt+2} 次")
                 page.wait_for_timeout(800)
                 _set_send_diagnostics(
@@ -473,13 +507,76 @@ def _is_chat_page(url: str, platform: str) -> bool:
     return adapter.is_chat_page_fn(url)
 
 
+def _start_send_network_probe(page, platform: str) -> dict:
+    """Capture likely send API responses; endpoint patterns can be tuned via env."""
+    patterns = SEND_ENDPOINT_PATTERNS.get(str(platform or "").lower(), ("message", "messages", "send"))
+    probe = {"matches": [], "patterns": patterns, "handler": None}
+
+    def _handler(response):
+        try:
+            method = str(response.request.method or "").upper()
+            if method not in {"POST", "PUT", "PATCH"}:
+                return
+            url = str(response.url or "").lower()
+            if not any(pattern in url for pattern in patterns):
+                return
+            probe["matches"].append({
+                "url": response.url,
+                "status": int(response.status),
+                "method": method,
+            })
+        except Exception:
+            return
+
+    probe["handler"] = _handler
+    try:
+        page.on("response", _handler)
+    except Exception:
+        probe["handler"] = None
+    return probe
+
+
+def _stop_send_network_probe(page, probe: Optional[dict]) -> None:
+    if not probe or not probe.get("handler"):
+        return
+    try:
+        page.remove_listener("response", probe["handler"])
+    except Exception:
+        pass
+
+
+def _network_probe_failure(probe: Optional[dict]) -> tuple[bool, str]:
+    for item in list((probe or {}).get("matches", [])):
+        status = int(item.get("status") or 0)
+        if status >= 400:
+            return True, f"{item.get('method', '')} {status} {item.get('url', '')}"[:160]
+    return False, ""
+
+
+def _wait_for_network_probe_failure(page, probe: Optional[dict]) -> tuple[bool, str]:
+    deadline = time.time() + (SEND_NETWORK_ACK_MS / 1000.0)
+    while time.time() < deadline:
+        failed, marker = _network_probe_failure(probe)
+        if failed:
+            return True, marker
+        page.wait_for_timeout(250)
+    return False, ""
+
+
 def _send_message(page, platform: str):
     """发送消息（按平台区分）"""
     adapter = _get_platform_adapter(platform)
     page.keyboard.press(adapter.send_key)
 
 
-def _verify_sent(page, input_box, line: str, platform: str, before_state: Optional[dict] = None) -> tuple[bool, str]:
+def _verify_sent(
+    page,
+    input_box,
+    line: str,
+    platform: str,
+    before_state: Optional[dict] = None,
+    network_probe: Optional[dict] = None,
+) -> tuple[bool, str]:
     """验证消息是否发送成功：必须看到新的我方气泡出现，不再只凭输入框清空判成功。"""
     expected = _normalize_text(line)
     prior = before_state or {"count": 0, "last_text": ""}
@@ -506,6 +603,9 @@ def _verify_sent(page, input_box, line: str, platform: str, before_state: Option
         if new_tail_confirmed:
             if not input_cleared_once:
                 print("[Send] ℹ️ 输入框未及时清空，但已确认新气泡落地")
+            failed, marker = _wait_for_network_probe_failure(page, network_probe)
+            if failed:
+                return False, f"network_send_failed_after_optimistic_render:{marker[:80]}"
             failed, marker = _wait_for_send_failure_marker(page, platform)
             if failed:
                 return False, f"bubble_failed_after_optimistic_render:{marker[:80]}"
@@ -518,7 +618,13 @@ def _verify_sent(page, input_box, line: str, platform: str, before_state: Option
     return False, "no_new_bubble"
 
 
-def _verify_sent_late(page, line: str, platform: str, before_state: Optional[dict] = None) -> tuple[bool, str]:
+def _verify_sent_late(
+    page,
+    line: str,
+    platform: str,
+    before_state: Optional[dict] = None,
+    network_probe: Optional[dict] = None,
+) -> tuple[bool, str]:
     """发送确认超时后的幂等补确认，避免慢刷新导致重复发送。"""
     expected = _normalize_text(line)
     prior = before_state or {"count": 0, "last_text": ""}
@@ -531,6 +637,9 @@ def _verify_sent_late(page, line: str, platform: str, before_state: Optional[dic
     last_text_matches = current_last == expected
     new_tail_confirmed = last_text_matches and (count_increased or prior_last != expected)
     if new_tail_confirmed:
+        failed, marker = _wait_for_network_probe_failure(page, network_probe)
+        if failed:
+            return False, f"network_send_failed_after_late_confirm:{marker[:80]}"
         failed, marker = _wait_for_send_failure_marker(page, platform)
         if failed:
             return False, f"bubble_failed_after_late_confirm:{marker[:80]}"
