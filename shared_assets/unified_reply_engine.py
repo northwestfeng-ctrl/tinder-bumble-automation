@@ -268,16 +268,31 @@ def build_contextual_fallback_reply(
     if _contains_cjk_text(last_text) and "戒烟" in last_text:
         return _clip_reply("还在努力 你这监督来得挺及时", max_len)
 
-    if any(token in last_text for token in ("？", "?")) or any(
-        token in normalized.split() for token in ("why", "who", "what", "where", "when", "which", "how")
-    ):
-        return _clip_reply("I'll make you work a little for that" if english else "这个先卖个关子 你再猜一下", max_len)
-
     if any(token in last_text for token in ("谢谢", "多谢")) or "thank" in normalized:
         return _clip_reply("I'll take that" if english else "这句我先收下", max_len)
 
     if _contains_cjk_text(recent_partner_text) and any(token in recent_partner_text for token in ("照片", "本人", "可爱")):
         return _clip_reply("本人 但你这么夸我有点难接", max_len)
+
+    if _contains_cjk_text(last_text) and "什么梗" in last_text:
+        return _clip_reply("就是字面意思 看你愿不愿意接", max_len)
+
+    if _contains_cjk_text(last_text) and "不证明" in last_text:
+        return _clip_reply("行 那就慢慢看", max_len)
+
+    compact_last = re.sub(r"\s+", "", last_text)
+    if _contains_cjk_text(recent_partner_text) and len(compact_last) <= 10:
+        if (
+            any(token in compact_last for token in ("纽约", "福州", "马尾", "上海", "北京"))
+            and (compact_last.endswith("也是") or "也算" in compact_last)
+        ):
+            return _clip_reply("这个归属申请有点大胆", max_len)
+
+    if (
+        any(token in last_text for token in ("哪", "谁", "猜", "选哪个", "哪张"))
+        or any(token in normalized.split() for token in ("who", "which"))
+    ):
+        return _clip_reply("I'll make you work a little for that" if english else "这个先卖个关子 你再猜一下", max_len)
 
     if any(token in normalized for token in ("hi", "hello", "hey")) or any(token in last_text for token in ("嗨", "哈喽")):
         if platform_key == "bumble" and any(token in bio_text for token in ("牛肉丸", "肉丸")):
@@ -286,9 +301,8 @@ def build_contextual_fallback_reply(
             return _clip_reply("hey, good timing" if english else "来得刚好 我接住了", max_len)
         return _clip_reply("Right on time" if english else "来得刚好 我接住了", max_len)
 
-    if len(last_text) >= 4:
-        return None if english else _clip_reply("你这句有点意思", max_len)
-
+    # Do not send generic filler like "你这句有点意思" after LLM/repair failure.
+    # Existing chats should either hit a strong context fallback above or skip.
     return None
 
 
@@ -345,6 +359,7 @@ def is_fallback_reply(text: str) -> bool:
     return normalized == SAFE_FALLBACK_REPLY or normalized.lower() in {
         "right on time",
         "hey, good timing",
+        "你这句有点意思",
     }
 
 

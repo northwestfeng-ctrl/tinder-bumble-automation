@@ -2673,6 +2673,12 @@ class TinderBot:
                         f"同一条跳过入站仍在冷却中（{handled_reason}），约剩 {remaining_hours}h，跳过重试: {latest_text[:30]}...",
                     )
                     return False
+                if handled_reason.startswith("skipped:no_safe"):
+                    self._log(
+                        "info",
+                        f"无安全回复冷却已结束，重新放行该入站: {latest_text[:30]}...",
+                    )
+                    return True
 
             if len(current_inbound) > len(recorded_inbound):
                 self._record_partner_followup_if_needed(

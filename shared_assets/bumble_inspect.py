@@ -567,6 +567,9 @@ def _is_new_messages(match_id: str, match_name: str, messages: list) -> bool:
             remaining_hours = max(int(remaining.total_seconds() // 3600), 0)
             log.info(f"[Bumble] 同一条跳过入站仍在冷却中（{handled_reason}），约剩 {remaining_hours}h，跳过重试: {latest_text[:30]}...")
             return False
+        if handled_reason.startswith("skipped:no_safe"):
+            log.info(f"[Bumble] 无安全回复冷却已结束，重新放行该入站: {latest_text[:30]}...")
+            return True
 
     if len(current_inbound) > len(recorded_inbound):
         _record_partner_followup_if_needed(match_id, match_name, messages, prev_entry)
