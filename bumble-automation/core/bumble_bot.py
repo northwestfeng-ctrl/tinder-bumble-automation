@@ -289,16 +289,21 @@ class BumbleBot:
                             }
                             return '';
                         };
+                        const nodeDirection = (node) => {
+                            const inferred = inferSenderFromDom(node) || fallbackSenderFromGeometry(node);
+                            return inferred === 'me' ? 'out' : 'in';
+                        };
+                        const textHash = (node) => {
+                            const raw = ((node && node.textContent) || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+                            let hash = 0;
+                            for (let i = 0; i < raw.length; i++) {
+                                hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+                            }
+                            return Math.abs(hash).toString(36) || 'empty';
+                        };
                         const selfAttr = readStableAttr(bubble);
                         if (selfAttr) return `${sender}::attr::${selfAttr}`;
                         if (text === '[liked your message]') {
-                            const anchorSender = (node) => {
-                                try {
-                                    return inferSenderFromDom(node) || fallbackSenderFromGeometry(node);
-                                } catch (e) {
-                                    return '';
-                                }
-                            };
                             const parent = bubble.parentElement;
                             const nearby = [
                                 parent && parent.previousElementSibling,
@@ -307,12 +312,11 @@ class BumbleBot:
                                 bubble.nextElementSibling,
                             ].filter(Boolean);
                             for (const node of nearby) {
-                                if (anchorSender(node) !== 'me') continue;
                                 const anchor = readStableAttr(node, 3);
-                                if (anchor) return `${sender}::reaction_like::react_to:${anchor}`;
+                                if (anchor) return `${sender}::reaction_like::react_to:${nodeDirection(node)}:${anchor}`;
                             }
-                            const rect = bubble.getBoundingClientRect();
-                            return `${sender}::reaction_like::canonical_y:${Math.floor(rect.top / 100)}`;
+                            const container = bubble.closest('[class*="message"], [class*="bubble"]') || bubble.parentElement || bubble;
+                            return `${sender}::reaction_like::canonical_hash:${nodeDirection(container)}:${textHash(container)}`;
                         }
                         return `${sender}::text::${text}`;
                     };
@@ -482,16 +486,21 @@ class BumbleBot:
                     }
                     return '';
                 };
+                const nodeDirection = (node) => {
+                    const inferred = inferSenderFromDom(node) || fallbackSenderFromGeometry(node);
+                    return inferred === 'me' ? 'out' : 'in';
+                };
+                const textHash = (node) => {
+                    const raw = ((node && node.textContent) || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+                    let hash = 0;
+                    for (let i = 0; i < raw.length; i++) {
+                        hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+                    }
+                    return Math.abs(hash).toString(36) || 'empty';
+                };
                 const selfAttr = readStableAttr(bubble);
                 if (selfAttr) return `${sender}::attr::${selfAttr}`;
                 if (text === '[liked your message]') {
-                    const anchorSender = (node) => {
-                        try {
-                            return inferSenderFromDom(node) || fallbackSenderFromGeometry(node);
-                        } catch (e) {
-                            return '';
-                        }
-                    };
                     const parent = bubble.parentElement;
                     const nearby = [
                         parent && parent.previousElementSibling,
@@ -500,12 +509,11 @@ class BumbleBot:
                         bubble.nextElementSibling,
                     ].filter(Boolean);
                     for (const node of nearby) {
-                        if (anchorSender(node) !== 'me') continue;
                         const anchor = readStableAttr(node, 3);
-                        if (anchor) return `${sender}::reaction_like::react_to:${anchor}`;
+                        if (anchor) return `${sender}::reaction_like::react_to:${nodeDirection(node)}:${anchor}`;
                     }
-                    const rect = bubble.getBoundingClientRect();
-                    return `${sender}::reaction_like::canonical_y:${Math.floor(rect.top / 100)}`;
+                    const container = bubble.closest('[class*="message"], [class*="bubble"]') || bubble.parentElement || bubble;
+                    return `${sender}::reaction_like::canonical_hash:${nodeDirection(container)}:${textHash(container)}`;
                 }
                 return `${sender}::text::${text}`;
             };

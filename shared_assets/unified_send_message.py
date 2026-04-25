@@ -597,9 +597,10 @@ def _response_business_failure(response) -> str:
     return marker[:160] if marker else ""
 
 
-def _extract_business_failure_marker(payload) -> str:
+def _extract_business_failure_marker(payload, source_key: str = "") -> str:
     if payload in (None, "", [], {}):
         return ""
+    source = str(source_key or "").strip()
     if isinstance(payload, dict):
         for key in ("error", "errors", "error_code", "errorCode", "error_message", "errorMessage"):
             if key in payload and _truthy_error_value(payload.get(key)):
@@ -607,16 +608,22 @@ def _extract_business_failure_marker(payload) -> str:
         status_value = payload.get("status") or payload.get("result")
         if isinstance(status_value, str) and re.search(r"(error|fail|denied|blocked|ban|limit)", status_value, re.I):
             return f"status={status_value}"
-        for value in payload.values():
-            marker = _extract_business_failure_marker(value)
+        echo_keys = {"message", "messages", "text", "content", "body", "reply", "data_text", "caption"}
+        for key, value in payload.items():
+            if str(key).strip() in echo_keys:
+                continue
+            marker = _extract_business_failure_marker(value, str(key))
             if marker:
                 return marker
         return ""
     if isinstance(payload, list):
         for item in payload[:5]:
-            marker = _extract_business_failure_marker(item)
+            marker = _extract_business_failure_marker(item, source)
             if marker:
                 return marker
+        return ""
+    error_like_source = re.search(r"(error|status|result|reason|code|failure|fail)", source, re.I)
+    if not error_like_source:
         return ""
     text = str(payload)
     if re.search(r"(shadow.?ban|rate.?limit|too many|blocked|forbidden|policy|not sent|send failed|发送失败|风控|封禁|限制)", text, re.I):
