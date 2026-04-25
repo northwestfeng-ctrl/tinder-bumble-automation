@@ -53,6 +53,7 @@ def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int | No
 
 
 DEFAULT_SEND_MAX_RETRIES = _env_int("APP_SEND__MAX_RETRIES", 3, min_value=1, max_value=10)
+SEND_FAILURE_SETTLE_MS = _env_int("APP_SEND__FAILURE_SETTLE_MS", 1600, min_value=300, max_value=5000)
 
 
 @dataclass(frozen=True)
@@ -427,6 +428,45 @@ def _capture_outgoing_state(page, platform: str) -> dict:
     }
 
 
+def _detect_send_failure_marker(page, platform: str) -> tuple[bool, str]:
+    """Look for late optimistic-send failure markers before we mark DB state as replied."""
+    del platform
+    try:
+        result = page.evaluate(r"""
+            () => {
+                const failureRe = /(failed|not sent|couldn.?t send|try again|retry|undelivered|发送失败|未发送|重试|重新发送|失败)/i;
+                const nodes = Array.from(document.querySelectorAll('[class], [aria-label], [title], button, [role="button"]'));
+                for (const node of nodes) {
+                    const text = [
+                        node.innerText || '',
+                        node.getAttribute && node.getAttribute('aria-label') || '',
+                        node.getAttribute && node.getAttribute('title') || '',
+                        node.getAttribute && node.getAttribute('class') || '',
+                        node.getAttribute && node.getAttribute('data-testid') || '',
+                    ].join(' ').trim();
+                    if (text && failureRe.test(text)) {
+                        return { failed: true, marker: text.slice(0, 160) };
+                    }
+                }
+                return { failed: false, marker: '' };
+            }
+        """)
+        return bool(result.get("failed")), str(result.get("marker") or "")
+    except Exception:
+        return False, ""
+
+
+def _wait_for_send_failure_marker(page, platform: str) -> tuple[bool, str]:
+    """Give the SPA a short window to flip an optimistic bubble into failed state."""
+    deadline = time.time() + (SEND_FAILURE_SETTLE_MS / 1000.0)
+    while time.time() < deadline:
+        failed, marker = _detect_send_failure_marker(page, platform)
+        if failed:
+            return True, marker
+        page.wait_for_timeout(250)
+    return False, ""
+
+
 def _is_chat_page(url: str, platform: str) -> bool:
     """判断是否在聊天页"""
     adapter = _get_platform_adapter(platform)
@@ -466,6 +506,9 @@ def _verify_sent(page, input_box, line: str, platform: str, before_state: Option
         if new_tail_confirmed:
             if not input_cleared_once:
                 print("[Send] ℹ️ 输入框未及时清空，但已确认新气泡落地")
+            failed, marker = _wait_for_send_failure_marker(page, platform)
+            if failed:
+                return False, f"bubble_failed_after_optimistic_render:{marker[:80]}"
             return True, "bubble_confirmed"
 
         page.wait_for_timeout(300)
@@ -488,5 +531,8 @@ def _verify_sent_late(page, line: str, platform: str, before_state: Optional[dic
     last_text_matches = current_last == expected
     new_tail_confirmed = last_text_matches and (count_increased or prior_last != expected)
     if new_tail_confirmed:
+        failed, marker = _wait_for_send_failure_marker(page, platform)
+        if failed:
+            return False, f"bubble_failed_after_late_confirm:{marker[:80]}"
         return True, "sent_confirmed_after_verify_timeout"
     return False, "late_bubble_missing"

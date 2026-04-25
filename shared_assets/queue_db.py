@@ -149,25 +149,34 @@ class MessageQueue:
     def mark_sent(self, item: QueuedMessage, reply: str) -> bool:
         with self._lock:
             try:
-                if not self._is_current_pending(item):
+                now = time.time()
+                self._db_conn.execute("BEGIN IMMEDIATE")
+                deleted = self._db_conn.execute(
+                    """
+                    DELETE FROM pending_messages
+                    WHERE id=? AND platform=? AND match_id=? AND ABS(enqueued_at - ?) < 0.000001
+                    """,
+                    (item.pending_id, item.platform, item.match_id, item.enqueued_at),
+                )
+                if deleted.rowcount != 1:
+                    self._db_conn.rollback()
                     log.info(
                         f"[Queue] 丢弃过期 reply: {item.platform}/{item.match_name} "
                         f"(match_id={item.match_id}, pending_id={item.pending_id})"
                     )
                     return False
-                now = time.time()
                 self._db_conn.execute("""
                     INSERT OR REPLACE INTO reply_cache
                         (platform, match_id, reply, generated_at, sent, sent_at)
                     VALUES (?, ?, ?, ?, 0, NULL)
                 """, (item.platform, item.match_id, reply, now))
-                self._db_conn.execute(
-                    "DELETE FROM pending_messages WHERE id=?",
-                    (item.pending_id,)
-                )
                 self._db_conn.commit()
                 return True
             except Exception as e:
+                try:
+                    self._db_conn.rollback()
+                except Exception:
+                    pass
                 print(f"[Queue] mark_sent error: {e}")
                 return False
 
@@ -175,19 +184,28 @@ class MessageQueue:
         """无安全回复时将当前待处理项出队，避免后台 worker 死循环重试同一条消息。"""
         with self._lock:
             try:
-                if not self._is_current_pending(item):
+                self._db_conn.execute("BEGIN IMMEDIATE")
+                deleted = self._db_conn.execute(
+                    """
+                    DELETE FROM pending_messages
+                    WHERE id=? AND platform=? AND match_id=? AND ABS(enqueued_at - ?) < 0.000001
+                    """,
+                    (item.pending_id, item.platform, item.match_id, item.enqueued_at),
+                )
+                if deleted.rowcount != 1:
+                    self._db_conn.rollback()
                     log.info(
                         f"[Queue] 跳过过期 pending: {item.platform}/{item.match_name} "
                         f"(match_id={item.match_id}, pending_id={item.pending_id})"
                     )
                     return False
-                self._db_conn.execute(
-                    "DELETE FROM pending_messages WHERE id=?",
-                    (item.pending_id,)
-                )
                 self._db_conn.commit()
                 return True
             except Exception as e:
+                try:
+                    self._db_conn.rollback()
+                except Exception:
+                    pass
                 print(f"[Queue] mark_skipped error: {e}")
                 return False
 
@@ -202,11 +220,13 @@ class MessageQueue:
     def mark_reply_sent(self, platform: str, match_id: str) -> bool:
         with self._lock:
             try:
-                self._db_conn.execute("""
-                    UPDATE reply_cache SET sent=1, sent_at=? WHERE platform=? AND match_id=?
+                cur = self._db_conn.execute("""
+                    UPDATE reply_cache
+                    SET sent=1, sent_at=?
+                    WHERE platform=? AND match_id=? AND sent=0
                 """, (time.time(), platform, match_id))
                 self._db_conn.commit()
-                return True
+                return cur.rowcount > 0
             except Exception as e:
                 print(f"[Queue] mark_reply_sent error: {e}")
                 return False

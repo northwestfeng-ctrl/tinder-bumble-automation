@@ -218,7 +218,7 @@ class BumbleBot:
         """)
 
         # ── 2. 滚动增量收集 ──
-        seen_texts = set()
+        seen_keys = set()
         all_messages = []          # 按收集顺序（倒序，最后会反转）
         no_new_count = 0           # 连续未发现新消息的次数
         last_count = 0
@@ -277,7 +277,24 @@ class BumbleBot:
                         }
                         return attrText;
                     };
-                    bubbles.forEach(bubble => {
+                    const stableNodeKey = (bubble, text, sender, index) => {
+                        const attrNames = ['data-message-id', 'data-id', 'data-qa-id', 'data-qa-uid', 'data-testid', 'id'];
+                        let current = bubble;
+                        for (let depth = 0; depth < 8 && current; depth++, current = current.parentElement) {
+                            for (const name of attrNames) {
+                                const value = (current.getAttribute && current.getAttribute(name) || '').trim();
+                                if (value) return `${sender}::attr::${name}:${value}`;
+                            }
+                        }
+                        const parts = [];
+                        current = bubble;
+                        for (let depth = 0; depth < 8 && current && current.parentElement; depth++, current = current.parentElement) {
+                            const siblings = Array.from(current.parentElement.children || []);
+                            parts.push(`${current.tagName || 'node'}:${siblings.indexOf(current)}`);
+                        }
+                        return `${sender}::path::${parts.reverse().join('/') || index}::${text}`;
+                    };
+                    bubbles.forEach((bubble, index) => {
                         const text = extractBubbleText(bubble);
                         if (!text || text.length > 500) return;
 
@@ -287,7 +304,8 @@ class BumbleBot:
 
                         // 优先读 DOM 语义标记；坐标只作为最后兜底。
                         const sender = inferSenderFromDom(bubble) || fallbackSenderFromGeometry(bubble);
-                        results.push({ sender, text });
+                        const message_key = stableNodeKey(bubble, text, sender, index);
+                        results.push({ sender, text, message_key });
                     });
                     return results;
                 }
@@ -298,8 +316,9 @@ class BumbleBot:
             new_found = 0
 
             for item in batch:
-                if item['text'] not in seen_texts:
-                    seen_texts.add(item['text'])
+                key = item.get('message_key') or f"{item.get('sender', '')}::{item.get('text', '')}"
+                if key not in seen_keys:
+                    seen_keys.add(key)
                     all_messages.append(item)
                     new_found += 1
 
@@ -323,7 +342,12 @@ class BumbleBot:
         # 相邻去重（按时间正序）
         deduped = []
         for m in all_messages:
-            if not deduped or deduped[-1]['text'] != m['text']:
+            current_key = m.get('message_key') or f"{m.get('sender', '')}::{m.get('text', '')}"
+            previous_key = (
+                deduped[-1].get('message_key')
+                or f"{deduped[-1].get('sender', '')}::{deduped[-1].get('text', '')}"
+            ) if deduped else ""
+            if not deduped or previous_key != current_key:
                 deduped.append(m)
 
         return {
@@ -424,17 +448,36 @@ class BumbleBot:
                 return attrText;
             };
 
-            bubbles.forEach(b => {
+            const stableNodeKey = (bubble, text, sender, index) => {
+                const attrNames = ['data-message-id', 'data-id', 'data-qa-id', 'data-qa-uid', 'data-testid', 'id'];
+                let current = bubble;
+                for (let depth = 0; depth < 8 && current; depth++, current = current.parentElement) {
+                    for (const name of attrNames) {
+                        const value = (current.getAttribute && current.getAttribute(name) || '').trim();
+                        if (value) return `${sender}::attr::${name}:${value}`;
+                    }
+                }
+                const parts = [];
+                current = bubble;
+                for (let depth = 0; depth < 8 && current && current.parentElement; depth++, current = current.parentElement) {
+                    const siblings = Array.from(current.parentElement.children || []);
+                    parts.push(`${current.tagName || 'node'}:${siblings.indexOf(current)}`);
+                }
+                return `${sender}::path::${parts.reverse().join('/') || index}::${text}`;
+            };
+
+            bubbles.forEach((b, index) => {
                 const text = extractBubbleText(b);
                 if (!text || text.length > 500) return;
                 if (/^\d{1,2}:\d{2}$/.test(text)) return;
-                if (seen.has(text)) return;
-                seen.add(text);
 
                 const sender = inferSenderFromDom(b) || fallbackSenderFromGeometry(b);
                 const is_mine = sender === 'me';
+                const message_key = stableNodeKey(b, text, sender, index);
+                if (seen.has(message_key)) return;
+                seen.add(message_key);
 
-                messages.push({ sender: is_mine ? 'me' : 'them', text, is_mine });
+                messages.push({ sender: is_mine ? 'me' : 'them', text, is_mine, message_key });
             });
 
             // 读对方名字
