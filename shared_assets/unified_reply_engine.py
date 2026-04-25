@@ -202,13 +202,28 @@ def build_contextual_fallback_reply(
             return _clip_reply("You do have a memorable profile", max_len)
         return _clip_reply("先打个招呼 你这张有点会拍", max_len)
 
-    last_msg = messages[-1] or {}
+    last_msg = next(
+        (
+            item or {}
+            for item in reversed(messages or [])
+            if (item or {}).get("sender") != "me" and (item or {}).get("is_mine") is not True
+        ),
+        messages[-1] or {},
+    )
     last_text = re.sub(r"\s+", " ", (last_msg.get("text", "") or "")).strip()
     if not last_text:
         return None
 
-    english = _looks_english_text(last_text)
+    recent_partner_text = " ".join(
+        re.sub(r"\s+", " ", str((item or {}).get("text", "") or "")).strip()
+        for item in (messages or [])[-4:]
+        if (item or {}).get("sender") != "me" and (item or {}).get("is_mine") is not True
+    )
+    english = _looks_english_text(last_text) and not _contains_cjk_text(recent_partner_text or last_text)
     normalized = last_text.lower()
+
+    if _contains_cjk_text(last_text) and "戒烟" in last_text:
+        return _clip_reply("还在努力 你这监督来得挺及时", max_len)
 
     if any(token in last_text for token in ("？", "?")) or any(
         token in normalized.split() for token in ("why", "who", "what", "where", "when", "which", "how")
@@ -218,11 +233,6 @@ def build_contextual_fallback_reply(
     if any(token in last_text for token in ("谢谢", "多谢")) or "thank" in normalized:
         return _clip_reply("I'll take that" if english else "这句我先收下", max_len)
 
-    recent_partner_text = " ".join(
-        re.sub(r"\s+", " ", str((item or {}).get("text", "") or "")).strip()
-        for item in (messages or [])[-4:]
-        if (item or {}).get("sender") != "me" and (item or {}).get("is_mine") is not True
-    )
     if _contains_cjk_text(recent_partner_text) and any(token in recent_partner_text for token in ("照片", "本人", "可爱")):
         return _clip_reply("本人 但你这么夸我有点难接", max_len)
 
@@ -289,7 +299,10 @@ def build_reactivation_fallback_reply(
 def is_fallback_reply(text: str) -> bool:
     """判断一条消息是否为统一兜底回复。"""
     normalized = re.sub(r"\s+", " ", (text or "")).strip()
-    return normalized == SAFE_FALLBACK_REPLY
+    return normalized == SAFE_FALLBACK_REPLY or normalized.lower() in {
+        "right on time",
+        "hey, good timing",
+    }
 
 
 def is_like_reaction_message(message_or_text) -> bool:
