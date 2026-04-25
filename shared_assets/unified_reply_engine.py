@@ -1837,9 +1837,11 @@ def _looks_like_ai_refusal_reply(text: str) -> bool:
     if not candidate:
         return False
     refusal_re = re.compile(
-        r"(?:as an ai|ai language model|i'?m an ai|i cannot fulfill|i can'?t assist|"
+        r"(?:\bas an ai(?:\b| language model)|\bai language model\b|\bi'?m an ai\b|"
+        r"\bi (?:cannot|can'?t|am unable to) (?:help|assist|comply|provide|fulfill|complete)\b|"
         r"作为(?:一个)?(?:ai|人工智能|语言模型)|我是(?:一个)?(?:ai|人工智能|语言模型)|"
-        r"无法(?:提供|满足|协助|完成)|不能(?:提供|协助|完成)|不适合提供)",
+        r"(?:我|本模型|这个模型|系统)(?:无法|不能|不适合)(?:提供|满足|协助|完成|回答)|"
+        r"无法(?:为你|帮你|协助你)(?:提供|完成|回答))",
         re.IGNORECASE,
     )
     return bool(refusal_re.search(candidate))

@@ -33,6 +33,7 @@ from __future__ import annotations
 import time
 import random
 import os
+import re
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -64,9 +65,33 @@ def _env_patterns(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(part.strip().lower() for part in raw.split(",") if part.strip())
 
 
-SEND_ENDPOINT_PATTERNS = {
-    "tinder": _env_patterns("APP_SEND__TINDER_ENDPOINT_PATTERNS", ("message", "messages", "send")),
-    "bumble": _env_patterns("APP_SEND__BUMBLE_ENDPOINT_PATTERNS", ("message", "messages", "chat", "send")),
+def _env_regexes(name: str, default: tuple[str, ...]) -> tuple[re.Pattern, ...]:
+    raw = os.getenv(name, "")
+    patterns = tuple(part.strip() for part in raw.split(",") if part.strip()) if raw.strip() else default
+    compiled: list[re.Pattern] = []
+    for pattern in patterns:
+        try:
+            compiled.append(re.compile(pattern, re.IGNORECASE))
+        except re.error:
+            continue
+    return tuple(compiled)
+
+
+SEND_ENDPOINT_REGEXES = {
+    "tinder": _env_regexes(
+        "APP_SEND__TINDER_ENDPOINT_REGEXES",
+        (
+            r"/v2/matches/[^/?#]+/messages(?:[/?#]|$)",
+            r"/v3/matches/[^/?#]+/messages(?:[/?#]|$)",
+        ),
+    ),
+    "bumble": _env_regexes(
+        "APP_SEND__BUMBLE_ENDPOINT_REGEXES",
+        (
+            r"/m/api/message(?:[/?#]|$)",
+            r"/mwebapi\.phtml.*(?:SERVER_(?:POST|SEND)_CHAT_MESSAGE|message)",
+        ),
+    ),
 }
 
 
@@ -307,57 +332,56 @@ def send_message_unified(
                     )
                     continue
 
-                # 发送，并监听可能的底层发信 API 失败响应。
-                network_probe = _start_send_network_probe(page, platform)
-                _send_message(page, platform)
-                page.wait_for_timeout(600)
+                try:
+                    # 发送，并监听可能的底层发信 API 失败响应。
+                    network_probe = _start_send_network_probe(page, platform)
+                    _send_message(page, platform)
+                    page.wait_for_timeout(600)
 
-                # 验证发送成功
-                verified, verify_reason = _verify_sent(
-                    page,
-                    input_box,
-                    line,
-                    platform,
-                    before_state,
-                    network_probe,
-                )
-                if verified:
-                    _stop_send_network_probe(page, network_probe)
-                    print(f"[Send] 第 {i+1}/{len(lines)} 条发送成功: {line[:30]}...")
-                    _set_send_diagnostics(
+                    # 验证发送成功
+                    verified, verify_reason = _verify_sent(
                         page,
-                        ok=True,
-                        stage="verify",
-                        reason="sent_confirmed",
-                        line=line,
-                        line_index=i + 1,
-                        line_count=len(lines),
+                        input_box,
+                        line,
+                        platform,
+                        before_state,
+                        network_probe,
                     )
-                    break
+                    if verified:
+                        print(f"[Send] 第 {i+1}/{len(lines)} 条发送成功: {line[:30]}...")
+                        _set_send_diagnostics(
+                            page,
+                            ok=True,
+                            stage="verify",
+                            reason="sent_confirmed",
+                            line=line,
+                            line_index=i + 1,
+                            line_count=len(lines),
+                        )
+                        break
 
-                page.wait_for_timeout(800)
-                late_verified, late_reason = _verify_sent_late(
-                    page,
-                    line,
-                    platform,
-                    before_state,
-                    network_probe,
-                )
-                if late_verified:
-                    _stop_send_network_probe(page, network_probe)
-                    print(f"[Send] ℹ️ 第 {i+1}/{len(lines)} 条发送晚确认成功: {line[:30]}...")
-                    _set_send_diagnostics(
+                    page.wait_for_timeout(800)
+                    late_verified, late_reason = _verify_sent_late(
                         page,
-                        ok=True,
-                        stage="verify_late",
-                        reason=late_reason,
-                        line=line,
-                        line_index=i + 1,
-                        line_count=len(lines),
+                        line,
+                        platform,
+                        before_state,
+                        network_probe,
                     )
-                    break
-
-                _stop_send_network_probe(page, network_probe)
+                    if late_verified:
+                        print(f"[Send] ℹ️ 第 {i+1}/{len(lines)} 条发送晚确认成功: {line[:30]}...")
+                        _set_send_diagnostics(
+                            page,
+                            ok=True,
+                            stage="verify_late",
+                            reason=late_reason,
+                            line=line,
+                            line_index=i + 1,
+                            line_count=len(lines),
+                        )
+                        break
+                finally:
+                    _stop_send_network_probe(page, network_probe)
 
                 print(f"[Send] ⚠️ 第 {i+1} 条发送未确认({verify_reason})，重试第 {attempt+2} 次")
                 _set_send_diagnostics(
@@ -509,8 +533,8 @@ def _is_chat_page(url: str, platform: str) -> bool:
 
 def _start_send_network_probe(page, platform: str) -> dict:
     """Capture likely send API responses; endpoint patterns can be tuned via env."""
-    patterns = SEND_ENDPOINT_PATTERNS.get(str(platform or "").lower(), ("message", "messages", "send"))
-    probe = {"matches": [], "patterns": patterns, "handler": None}
+    regexes = SEND_ENDPOINT_REGEXES.get(str(platform or "").lower(), ())
+    probe = {"matches": [], "regexes": regexes, "handler": None, "removed": False}
 
     def _handler(response):
         try:
@@ -518,7 +542,7 @@ def _start_send_network_probe(page, platform: str) -> dict:
             if method not in {"POST", "PUT", "PATCH"}:
                 return
             url = str(response.url or "").lower()
-            if not any(pattern in url for pattern in patterns):
+            if not any(regex.search(url) for regex in regexes):
                 return
             probe["matches"].append({
                 "url": response.url,
@@ -537,8 +561,9 @@ def _start_send_network_probe(page, platform: str) -> dict:
 
 
 def _stop_send_network_probe(page, probe: Optional[dict]) -> None:
-    if not probe or not probe.get("handler"):
+    if not probe or not probe.get("handler") or probe.get("removed"):
         return
+    probe["removed"] = True
     try:
         page.remove_listener("response", probe["handler"])
     except Exception:

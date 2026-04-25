@@ -279,14 +279,30 @@ class BumbleBot:
                     };
                     const stableNodeKey = (bubble, text, sender, index) => {
                         const attrNames = ['data-message-id', 'data-id', 'data-qa-id', 'data-qa-uid', 'data-testid', 'id'];
-                        let current = bubble;
-                        for (let depth = 0; depth < 8 && current; depth++, current = current.parentElement) {
-                            for (const name of attrNames) {
-                                const value = (current.getAttribute && current.getAttribute(name) || '').trim();
-                                if (value) return `${sender}::attr::${name}:${value}`;
+                        const readStableAttr = (node, maxDepth = 8) => {
+                            let current = node;
+                            for (let depth = 0; depth < maxDepth && current; depth++, current = current.parentElement) {
+                                for (const name of attrNames) {
+                                    const value = (current.getAttribute && current.getAttribute(name) || '').trim();
+                                    if (value) return `${name}:${value}`;
+                                }
                             }
-                        }
+                            return '';
+                        };
+                        const selfAttr = readStableAttr(bubble);
+                        if (selfAttr) return `${sender}::attr::${selfAttr}`;
                         if (text === '[liked your message]') {
+                            const parent = bubble.parentElement;
+                            const nearby = [
+                                parent && parent.previousElementSibling,
+                                parent && parent.nextElementSibling,
+                                bubble.previousElementSibling,
+                                bubble.nextElementSibling,
+                            ].filter(Boolean);
+                            for (const node of nearby) {
+                                const anchor = readStableAttr(node, 3);
+                                if (anchor) return `${sender}::reaction_like::react_to:${anchor}`;
+                            }
                             return `${sender}::reaction_like::canonical`;
                         }
                         return `${sender}::text::${text}`;
@@ -447,14 +463,30 @@ class BumbleBot:
 
             const stableNodeKey = (bubble, text, sender, index) => {
                 const attrNames = ['data-message-id', 'data-id', 'data-qa-id', 'data-qa-uid', 'data-testid', 'id'];
-                let current = bubble;
-                for (let depth = 0; depth < 8 && current; depth++, current = current.parentElement) {
-                    for (const name of attrNames) {
-                        const value = (current.getAttribute && current.getAttribute(name) || '').trim();
-                        if (value) return `${sender}::attr::${name}:${value}`;
+                const readStableAttr = (node, maxDepth = 8) => {
+                    let current = node;
+                    for (let depth = 0; depth < maxDepth && current; depth++, current = current.parentElement) {
+                        for (const name of attrNames) {
+                            const value = (current.getAttribute && current.getAttribute(name) || '').trim();
+                            if (value) return `${name}:${value}`;
+                        }
                     }
-                }
+                    return '';
+                };
+                const selfAttr = readStableAttr(bubble);
+                if (selfAttr) return `${sender}::attr::${selfAttr}`;
                 if (text === '[liked your message]') {
+                    const parent = bubble.parentElement;
+                    const nearby = [
+                        parent && parent.previousElementSibling,
+                        parent && parent.nextElementSibling,
+                        bubble.previousElementSibling,
+                        bubble.nextElementSibling,
+                    ].filter(Boolean);
+                    for (const node of nearby) {
+                        const anchor = readStableAttr(node, 3);
+                        if (anchor) return `${sender}::reaction_like::react_to:${anchor}`;
+                    }
                     return `${sender}::reaction_like::canonical`;
                 }
                 return `${sender}::text::${text}`;
